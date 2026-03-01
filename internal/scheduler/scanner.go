@@ -27,9 +27,8 @@ type Scanner interface {
 // ScannerConfig 扫描配置（来自 config.ScanConfig）。上传目标由任务表 remote_name/remote_path 决定，此处不再包含。
 type ScannerConfig struct {
 	LocalPath       string
-	CronSchedule   string
-	Enabled        bool
-	IntervalSeconds int
+	Enabled         bool
+	IntervalSeconds int // 扫描间隔（秒）
 }
 
 type scanner struct {

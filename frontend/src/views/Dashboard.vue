@@ -13,146 +13,131 @@
 
     <n-spin :show="loading">
       <template v-if="data">
-        <!-- 概览卡片 -->
-        <section class="dashboard-section">
-          <h2 class="app-section-title">概览</h2>
-          <div class="overview-cards">
-            <div class="stat-card">
-              <div class="stat-card__accent stat-total" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">任务总数</span>
-                <span class="stat-card__value">{{ data.overview.task_total }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-pending" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">待上传</span>
-                <span class="stat-card__value">{{ data.overview.task_pending }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-running" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">上传中</span>
-                <span class="stat-card__value">{{ data.overview.task_running }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-success" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">上传完成</span>
-                <span class="stat-card__value">{{ data.overview.task_success }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-failed" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">上传失败</span>
-                <span class="stat-card__value">{{ data.overview.task_failed }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-paused" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">已暂停</span>
-                <span class="stat-card__value">{{ data.overview.task_paused }}</span>
-              </div>
-            </div>
-            <div class="stat-card stat-wide">
-              <div class="stat-card__accent stat-traffic" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">累计上传</span>
-                <span class="stat-card__value">{{ formatBytes(data.overview.uploaded_bytes_total) }}</span>
-                <span class="stat-card__unit">共 {{ data.overview.uploaded_files_total }} 个文件</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-success" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">监听文件夹</span>
-                <span class="stat-card__value">{{ data.overview.watch_folder_count }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-success" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">近 24h 完成</span>
-                <span class="stat-card__value">{{ data.overview.recent_24h_completed }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-card__accent stat-failed" />
-              <div class="stat-card__body">
-                <span class="stat-card__label">近 24h 失败</span>
-                <span class="stat-card__value">{{ data.overview.recent_24h_failed }}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <div class="dashboard-grid">
-          <!-- 按状态分布（柱状） -->
-          <section class="dashboard-section app-card">
-            <h2 class="app-section-title">按状态分布</h2>
-            <div class="bar-chart">
-              <div
-                v-for="item in data.by_status"
-                :key="item.status"
-                class="bar-row"
-              >
-                <span class="bar-label">{{ item.label }}</span>
-                <div class="bar-track">
-                  <div
-                    class="bar-fill"
-                    :class="'bar-' + item.status"
-                    :style="{ width: barWidth(item) }"
-                  />
+        <n-space vertical>
+          <!-- 概览卡片 -->
+          <section class="dashboard-section">
+            <h2 class="app-section-title">概览</h2>
+            <div class="overview-cards">
+              <div class="stat-card">
+                <div class="stat-card__accent stat-total" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">任务总数</span>
+                  <span class="stat-card__value">{{ data.overview.task_total }}</span>
                 </div>
-                <span class="bar-value">{{ item.count }}</span>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-pending" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">待上传</span>
+                  <span class="stat-card__value">{{ data.overview.task_pending }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-running" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">上传中</span>
+                  <span class="stat-card__value">{{ data.overview.task_running }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-success" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">上传完成</span>
+                  <span class="stat-card__value">{{ data.overview.task_success }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-failed" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">上传失败</span>
+                  <span class="stat-card__value">{{ data.overview.task_failed }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-paused" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">已暂停</span>
+                  <span class="stat-card__value">{{ data.overview.task_paused }}</span>
+                </div>
+              </div>
+              <div class="stat-card stat-wide">
+                <div class="stat-card__accent stat-traffic" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">累计上传</span>
+                  <span class="stat-card__value">{{ formatBytes(data.overview.uploaded_bytes_total) }}</span>
+                  <span class="stat-card__unit">共 {{ data.overview.uploaded_files_total }} 个文件</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-success" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">监听文件夹</span>
+                  <span class="stat-card__value">{{ data.overview.watch_folder_count }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-success" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">近 24h 完成</span>
+                  <span class="stat-card__value">{{ data.overview.recent_24h_completed }}</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-failed" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">近 24h 失败</span>
+                  <span class="stat-card__value">{{ data.overview.recent_24h_failed }}</span>
+                </div>
               </div>
             </div>
           </section>
 
-          <!-- 按时间趋势（折线/表） -->
-          <section class="dashboard-section app-card">
-            <h2 class="app-section-title">按日趋势（最近 {{ days }} 天）</h2>
-            <div class="app-table-wrap">
-              <n-data-table
-                :columns="byTimeColumns"
-                :data="data.by_time"
-                size="small"
-                :pagination="false"
-                :bordered="false"
-                striped
-              />
-            </div>
-          </section>
-        </div>
+          <div class="dashboard-grid">
+            <!-- 按状态分布（柱状） -->
+            <section class="dashboard-section app-card">
+              <h2 class="app-section-title">按状态分布</h2>
+              <div class="bar-chart">
+                <div
+                  v-for="item in data.by_status"
+                  :key="item.status"
+                  class="bar-row"
+                >
+                  <span class="bar-label">{{ item.label }}</span>
+                  <div class="bar-track">
+                    <div
+                      class="bar-fill"
+                      :class="'bar-' + item.status"
+                      :style="{ width: barWidth(item) }"
+                    />
+                  </div>
+                  <span class="bar-value">{{ item.count }}</span>
+                </div>
+              </div>
+            </section>
 
-        <!-- 按监听文件夹 -->
-        <section class="dashboard-section">
-          <h2 class="app-section-title">按监听文件夹</h2>
-          <div class="app-table-wrap">
-            <n-data-table
-              :columns="byWatchFolderColumns"
-              :data="data.by_watch_folder"
-              size="small"
-              :pagination="false"
-              :bordered="false"
-              striped
-            />
+            <!-- 按时间趋势（折线/表） -->
+            <section class="dashboard-section app-card">
+              <h2 class="app-section-title">按日趋势（最近 {{ days }} 天）</h2>
+              <div class="app-table-wrap">
+                <n-data-table
+                  :columns="byTimeColumns"
+                  :data="data.by_time"
+                  size="small"
+                  :pagination="false"
+                  :bordered="false"
+                  striped
+                />
+              </div>
+            </section>
           </div>
-        </section>
 
-        <div class="dashboard-grid">
-          <!-- 最近任务 -->
+          <!-- 按监听文件夹 -->
           <section class="dashboard-section">
-            <h2 class="app-section-title">最近完成/失败任务（10 条）</h2>
+            <h2 class="app-section-title">按监听文件夹</h2>
             <div class="app-table-wrap">
               <n-data-table
-                :columns="recentTaskColumns"
-                :data="data.items.recent_tasks || []"
+                :columns="byWatchFolderColumns"
+                :data="data.by_watch_folder"
                 size="small"
                 :pagination="false"
                 :bordered="false"
@@ -161,21 +146,38 @@
             </div>
           </section>
 
-          <!-- 失败任务 -->
-          <section class="dashboard-section">
-            <h2 class="app-section-title">失败任务（20 条）</h2>
-            <div class="app-table-wrap">
-              <n-data-table
-                :columns="failedTaskColumns"
-                :data="data.items.failed_tasks || []"
-                size="small"
-                :pagination="false"
-                :bordered="false"
-                striped
-              />
-            </div>
-          </section>
-        </div>
+          <div class="dashboard-grid">
+            <!-- 最近任务 -->
+            <section class="dashboard-section">
+              <h2 class="app-section-title">最近完成/失败任务（10 条）</h2>
+              <div class="app-table-wrap">
+                <n-data-table
+                  :columns="recentTaskColumns"
+                  :data="data.items.recent_tasks || []"
+                  size="small"
+                  :pagination="false"
+                  :bordered="false"
+                  striped
+                />
+              </div>
+            </section>
+
+            <!-- 失败任务 -->
+            <section class="dashboard-section">
+              <h2 class="app-section-title">失败任务（20 条）</h2>
+              <div class="app-table-wrap">
+                <n-data-table
+                  :columns="failedTaskColumns"
+                  :data="data.items.failed_tasks || []"
+                  size="small"
+                  :pagination="false"
+                  :bordered="false"
+                  striped
+                />
+              </div>
+            </section>
+          </div>
+        </n-space>
       </template>
       <template v-else-if="!loading">
         <div class="dashboard-empty">暂无数据</div>
@@ -186,7 +188,7 @@
 
 <script setup>
 import { ref, onMounted, h } from 'vue';
-import { NSelect, NSpin, NDataTable, NTag } from 'naive-ui';
+import { NSelect, NSpin, NDataTable, NTag, NSpace } from 'naive-ui';
 import { getDashboard } from '../api/analytics';
 
 const days = ref(7);

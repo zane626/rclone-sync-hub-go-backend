@@ -19,10 +19,9 @@ database:
 
 # 定时扫描（上传目标由任务表 upload_tasks 的 remote_name/remote_path 决定）
 scan:
-  local_path: /data/local    # 要扫描的本地目录（Docker 中可挂载）
-  cron_schedule: "*/5 * * * *"
+  local_path: /volumes    # 要扫描的本地目录（Docker 中可挂载）
   enabled: true
-  interval_seconds: 300      # 扫描间隔（秒），同时用于 watch_folders 扫描
+  interval_seconds: 300      # 扫描间隔（秒），用于本地目录与 watch_folders 扫描
 
 worker:
   max_concurrent: 3   # 最大并发上传数

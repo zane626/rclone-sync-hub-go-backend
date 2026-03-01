@@ -76,7 +76,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "本地起始路径，如 D:/data 或 /data/local",
+                        "description": "本地起始路径，如 /volumes",
                         "name": "path",
                         "in": "query",
                         "required": true

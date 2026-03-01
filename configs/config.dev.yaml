@@ -18,7 +18,6 @@ database:
 
 scan:
   local_path: ./data/local
-  cron_schedule: "*/5 * * * *"
   enabled: false
   interval_seconds: 300
 

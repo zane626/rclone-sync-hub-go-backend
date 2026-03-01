@@ -34,6 +34,7 @@
         :columns="columns"
         :data="tableData"
         :bordered="false"
+        :scroll-x="1400"
         :pagination="pagination"
         striped
       />
@@ -174,6 +175,19 @@ const dialog = useDialog();
 const remoteOptions = ref([]);
 const remoteLoading = ref(false);
 
+function formatDateTime(v) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${day} ${h}:${min}:${s}`;
+}
+
 const columns = [
   { title: '名称', key: 'name' },
   { title: '本地路径', key: 'localPath' },
@@ -199,8 +213,25 @@ const columns = [
     }
   },
   {
+    title: '最近一次扫描时间',
+    key: 'lastScanAt',
+    render: (row) => formatDateTime(row.LastScanAt)
+  },
+  {
+    title: '最近一次同步时间',
+    key: 'lastSyncAt',
+    render: (row) => formatDateTime(row.LastSyncAt)
+  },
+  {
+    title: '创建时间',
+    key: 'createdAt',
+    render: (row) => formatDateTime(row.CreatedAt)
+  },
+  {
     title: '操作',
     key: 'actions',
+    fixed: 'right',
+    width: 200,
     render(row) {
       const toggleLabel = row.status === 'paused' ? '启动' : '暂停';
       return h(
@@ -253,7 +284,7 @@ const form = ref({
   local_path: '',
   remote_name: '',
   remote_path: '',
-  max_depth: 0,
+  max_depth: 5,
   scan_interval_seconds: 300,
   sync_type: 'local_to_remote'
 });
@@ -271,7 +302,7 @@ const rules = {
 const pathSelectorVisible = ref(false);
 const pathTreeData = ref([]);
 const pathTreeLoading = ref(false);
-const pathRoot = ref('D:/');
+const pathRoot = ref('/volumes');
 
 async function loadSubdirsForNode(path) {
   const res = await fetchSubdirs(path);
@@ -349,6 +380,7 @@ async function loadData() {
       page_size: pagination.value.pageSize
     });
     tableData.value = (res.items || []).map((item) => ({
+      ...item,
       id: item.ID,
       name: item.Name,
       localPath: item.LocalPath,
@@ -415,7 +447,7 @@ function openCreate() {
     local_path: '',
     remote_name: '',
     remote_path: '',
-    max_depth: 0,
+    max_depth: 5,
     scan_interval_seconds: 300,
     sync_type: 'local_to_remote'
   });
@@ -430,7 +462,7 @@ function openEdit(row) {
     local_path: row.localPath,
     remote_name: row.remoteName,
     remote_path: row.remotePath,
-    max_depth: row.maxDepth || 0,
+    max_depth: row.maxDepth || 5,
     scan_interval_seconds: row.scanIntervalSeconds || 300,
     sync_type: row.syncType || 'local_to_remote'
   });
@@ -445,7 +477,7 @@ function handleSubmit() {
         local_path: form.value.local_path,
         remote_name: form.value.remote_name,
         remote_path: form.value.remote_path,
-        max_depth: form.value.max_depth || 0,
+        max_depth: form.value.max_depth || 5,
         scan_interval_seconds: form.value.scan_interval_seconds || 300,
         sync_type: form.value.sync_type
       };

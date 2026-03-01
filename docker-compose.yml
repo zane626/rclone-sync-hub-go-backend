@@ -1,7 +1,4 @@
-# 本地或生产部署示例：MySQL + 本服务
-# 使用前请先配置 configs/config.yaml 中的 database 与 scan.local_path / remote
-
-version: "3.8"
+name: rclone-sync-hub
 
 services:
   app:
@@ -9,11 +6,32 @@ services:
     ports:
       - "8080:8080"
     environment:
-      CONFIG_PATH: /app/configs/config.docker.yaml
+      # 数据库（与下方 mysql 服务一致）
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: app
+      DB_PASSWORD: apppassword
+      DB_NAME: rclone_sync_hub
+      # 服务
+      SERVER_PORT: "8080"
+      SERVER_MODE: release
+      EMBED_FRONTEND: "true"
+      ENABLE_SWAGGER: "true"
+      # 扫描（本地目录在容器内路径，需与 volumes 挂载一致）
+      SCAN_LOCAL_PATH: /volumes
+      SCAN_ENABLED: "false"
+      SCAN_INTERVAL_SECONDS: "300"
+      # Worker
+      WORKER_MAX_CONCURRENT: "3"
+      WORKER_MAX_RETRY: "3"
+      WORKER_QUEUE_SIZE: "1000"
+      # 日志
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      # 可选：RCLONE_BIN_PATH 默认 rclone
     volumes:
-      - ./configs:/app/configs:ro
-      - ./data/local:/data/local:ro   # 扫描的本地目录，按需修改
-      - rclone-config:/root/.config/rclone:ro  # rclone 配置（需先在本机 rclone config 后挂载）
+      - ./data/local:/volumes:ro
+      - C:\Users\Administrator\AppData\Roaming\rclone:/root/.config/rclone:ro
     depends_on:
       mysql:
         condition: service_healthy

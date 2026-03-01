@@ -17,8 +17,7 @@ database:
   conn_max_idle_time_mins: 10
 
 scan:
-  local_path: /data/local
-  cron_schedule: "*/5 * * * *"
+  local_path: /volumes
   enabled: false
   interval_seconds: 300
 

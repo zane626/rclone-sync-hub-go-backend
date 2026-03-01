@@ -441,7 +441,7 @@ paths:
     get:
       description: 根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）
       parameters:
-      - description: 本地起始路径，如 D:/data 或 /data/local
+      - description: 本地起始路径，如 /volumes
         in: query
         name: path
         required: true

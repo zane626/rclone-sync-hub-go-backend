@@ -35,7 +35,7 @@ type FSSubDirListResponse struct {
 // @Description  根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）
 // @Tags         filesystem
 // @Produce      json
-// @Param        path  query    string  true  "本地起始路径，如 D:/data 或 /data/local"
+// @Param        path  query    string  true  "本地起始路径，如 /volumes"
 // @Success      200   {object} FSSubDirListResponse
 // @Failure      400   {object} map[string]string
 // @Failure      500   {object} map[string]string
@@ -61,4 +61,3 @@ func (h *FSHandler) ListSubDirs(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, FSSubDirListResponse{Items: items})
 }
-

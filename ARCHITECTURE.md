@@ -35,7 +35,6 @@ rclone-sync-hub/
 ├── frontend/                    # Vue3 项目（单独开发，build 后 dist 被 embed）
 ├── configs/
 │   └── config.yaml              # 默认配置
-├── migrations/                  # 数据库迁移（可选，也可 Gorm AutoMigrate）
 ├── Dockerfile                   # 多阶段：Vue build -> Go build -> alpine + rclone
 ├── docker-compose.yml
 └── README.md

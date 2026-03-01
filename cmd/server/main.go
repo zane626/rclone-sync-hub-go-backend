@@ -50,7 +50,7 @@ import (
 var frontendFS embed.FS
 
 func main() {
-	// 1. 加载配置
+	// 1. 加载配置：CONFIG_PATH 为空或文件不存在时仅从环境变量加载（便于 Docker 无挂载 config 部署）
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "configs/config.yaml"
@@ -113,7 +113,6 @@ func main() {
 
 	scanCfg := scheduler.ScannerConfig{
 		LocalPath:       cfg.Scan.LocalPath,
-		CronSchedule:    cfg.Scan.CronSchedule,
 		Enabled:         cfg.Scan.Enabled,
 		IntervalSeconds: cfg.Scan.IntervalSeconds,
 	}
@@ -185,23 +184,41 @@ func main() {
 	logger.L.Info("server exited")
 }
 
-// serveFrontend 返回 Gin 的 NoRoute 处理：先尝试静态文件，不存在则回退到 index.html（SPA fallback）。
+// serveFrontend 返回 Gin 的 NoRoute 处理，兼容 Vue Router history 模式：
+// - 存在对应静态文件（如 /assets/xxx.js）则直接返回该文件；
+// - 不存在则统一返回 index.html，由前端路由处理（/dashboard、/tasks 等）。
+// 根路径 / 与上述 fallback 均直接输出 index 内容，不发起重定向，避免 ERR_TOO_MANY_REDIRECTS。
 func serveFrontend(staticFS fs.FS) gin.HandlerFunc {
 	fileServer := http.FileServer(http.FS(staticFS))
+	var indexHTML []byte
+	if rfs, ok := staticFS.(fs.ReadFileFS); ok {
+		indexHTML, _ = rfs.ReadFile("index.html")
+	}
 	return func(c *gin.Context) {
-		p := c.Request.URL.Path
-		if p == "/" {
-			p = "/index.html"
+		path := c.Request.URL.Path
+		p := strings.TrimPrefix(path, "/")
+		// 根路径：直接返回 index.html
+		if p == "" || p == "/" {
+			if len(indexHTML) > 0 {
+				c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+				return
+			}
+			p = "index.html"
 		}
-		f, err := staticFS.Open(strings.TrimPrefix(p, "/"))
+		// 尝试作为静态文件打开（如 /assets/index-xxx.js、favicon.ico）
+		f, err := staticFS.Open(p)
 		if err != nil {
-			// 未匹配到静态资源，返回 index.html
+			// Vue history 模式 fallback：任意未匹配路径（如 /dashboard、/tasks）均返回 index.html，由前端路由接管
+			if len(indexHTML) > 0 {
+				c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+				return
+			}
 			c.Request.URL.Path = "/index.html"
 			fileServer.ServeHTTP(c.Writer, c.Request)
 			return
 		}
 		_ = f.Close()
-		c.Request.URL.Path = p
+		c.Request.URL.Path = "/" + p
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	}
 }

@@ -1,0 +1,13 @@
+# 避免 COPY frontend/ 覆盖镜像内 npm ci 生成的 node_modules（Windows 下易报错）
+frontend/node_modules
+frontend/dist
+
+# 通用忽略
+.git
+.gitignore
+.idea
+*.md
+tmp
+*.exe
+.env
+.env.*
