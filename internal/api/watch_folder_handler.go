@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"rclone-sync-hub/internal/model"
 	"rclone-sync-hub/internal/service"
@@ -88,6 +89,7 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 // @Tags         watch-folders
 // @Produce      json
 // @Param        status     query    string  false  "状态: detecting|watching|stopped|paused|error"
+// @Param        keyword    query    string  false  "关键词：对 name/local_path/remote_name/remote_path 模糊查询"
 // @Param        page       query    int     false  "页码，从 1 开始"     default(1)
 // @Param        page_size  query    int     false  "每页条数"           default(20)
 // @Success      200        {object} map[string]interface{}  "items 为列表，total 为总数"
@@ -95,9 +97,10 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 // @Router       /api/watch-folders [get]
 func (h *WatchFolderHandler) List(c *gin.Context) {
 	status := c.DefaultQuery("status", "")
+	keyword := strings.TrimSpace(c.DefaultQuery("keyword", ""))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	items, total, err := h.svc.List(c.Request.Context(), status, page, pageSize)
+	items, total, err := h.svc.List(c.Request.Context(), status, keyword, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -108,6 +111,7 @@ func (h *WatchFolderHandler) List(c *gin.Context) {
 		"page":      page,
 		"page_size": pageSize,
 		"status":    status,
+		"keyword":   keyword,
 	})
 }
 

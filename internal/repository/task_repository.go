@@ -18,8 +18,10 @@ type TaskRepository interface {
 	Update(t *model.UploadTask) error
 	Delete(id uint) error
 	ListPending(limit int) ([]model.UploadTask, error)
-	// List 按状态分页列表，status 为空表示全部。
-	List(status string, offset, limit int) ([]model.UploadTask, error)
+	// List 按状态分页列表，status 为空表示全部；keyword 非空时对 watch_folder_name/file_name/local_path/remote_name/remote_path 模糊查询。
+	List(status, keyword string, offset, limit int) ([]model.UploadTask, error)
+	// CountForList 与 List 同条件的总数，用于分页。
+	CountForList(status, keyword string) (int64, error)
 	CountByStatus(status string) (int64, error)
 	CountAll() (int64, error)
 	CountByLocalPath(localPath string) (int64, error)
@@ -75,15 +77,32 @@ func (r *taskRepository) ListPending(limit int) ([]model.UploadTask, error) {
 	return list, err
 }
 
-func (r *taskRepository) List(status string, offset, limit int) ([]model.UploadTask, error) {
-	var list []model.UploadTask
-	q := r.db.Model(&model.UploadTask{})
+func (r *taskRepository) applyListFilters(q *gorm.DB, status, keyword string) *gorm.DB {
 	if status != "" {
 		q = q.Where("status = ?", status)
 	}
-	q = q.Offset(offset).Limit(limit).Order("id DESC")
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		q = q.Where("watch_folder_name LIKE ? OR file_name LIKE ? OR local_path LIKE ? OR remote_name LIKE ? OR remote_path LIKE ?", like, like, like, like, like)
+	}
+	return q
+}
+
+func (r *taskRepository) List(status, keyword string, offset, limit int) ([]model.UploadTask, error) {
+	var list []model.UploadTask
+	q := r.db.Model(&model.UploadTask{})
+	q = r.applyListFilters(q, status, keyword)
+	q = q.Order("created_at DESC").Offset(offset).Limit(limit)
 	err := q.Preload("FileRecord").Find(&list).Error
 	return list, err
+}
+
+func (r *taskRepository) CountForList(status, keyword string) (int64, error) {
+	var n int64
+	q := r.db.Model(&model.UploadTask{})
+	q = r.applyListFilters(q, status, keyword)
+	err := q.Count(&n).Error
+	return n, err
 }
 
 func (r *taskRepository) CountByStatus(status string) (int64, error) {

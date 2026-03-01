@@ -73,7 +73,7 @@ func (s *watchFolderScanner) ScanOnce(ctx context.Context) (created int, err err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	folders, _, err := s.watchRepo.List(model.WatchFolderStatusWatching, 0, 0)
+	folders, _, err := s.watchRepo.List(model.WatchFolderStatusWatching, "", 0, 0)
 	if err != nil {
 		return 0, err
 	}

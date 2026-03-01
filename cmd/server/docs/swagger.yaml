@@ -1,6 +1,6 @@
 basePath: /
 definitions:
-  internal_api.FSSubDir:
+  api.FSSubDir:
     properties:
       has_sub_dirs:
         type: boolean
@@ -9,14 +9,14 @@ definitions:
       path:
         type: string
     type: object
-  internal_api.FSSubDirListResponse:
+  api.FSSubDirListResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/internal_api.FSSubDir'
+          $ref: '#/definitions/api.FSSubDir'
         type: array
     type: object
-  internal_api.TaskBatchReq:
+  api.TaskBatchReq:
     properties:
       ids:
         description: 任务 ID 列表
@@ -26,7 +26,7 @@ definitions:
     required:
     - ids
     type: object
-  internal_api.TaskCreateReq:
+  api.TaskCreateReq:
     properties:
       file_name:
         type: string
@@ -47,7 +47,7 @@ definitions:
     - remote_name
     - remote_path
     type: object
-  internal_api.WatchFolderCreateReq:
+  api.WatchFolderCreateReq:
     properties:
       local_path:
         type: string
@@ -72,7 +72,7 @@ definitions:
     - remote_name
     - remote_path
     type: object
-  internal_api.WatchFolderUpdateReq:
+  api.WatchFolderUpdateReq:
     properties:
       enabled:
         type: boolean
@@ -93,7 +93,7 @@ definitions:
       sync_type:
         type: string
     type: object
-  rclone-sync-hub_internal_model.FileRecord:
+  model.FileRecord:
     properties:
       createdAt:
         type: string
@@ -116,7 +116,27 @@ definitions:
       uploadedAt:
         type: string
     type: object
-  rclone-sync-hub_internal_model.UploadTask:
+  model.UploadLog:
+    properties:
+      bytesDone:
+        type: integer
+      bytesTotal:
+        type: integer
+      createdAt:
+        type: string
+      id:
+        type: integer
+      message:
+        type: string
+      percent:
+        type: number
+      speed:
+        description: bytes/s
+        type: integer
+      taskID:
+        type: integer
+    type: object
+  model.UploadTask:
     properties:
       accumulatedFailures:
         description: 累计失败次数（便于分析）
@@ -134,7 +154,7 @@ definitions:
         type: string
       fileRecord:
         allOf:
-        - $ref: '#/definitions/rclone-sync-hub_internal_model.FileRecord'
+        - $ref: '#/definitions/model.FileRecord'
         description: 关联（不参与表结构，仅查询用）
       fileRecordID:
         type: integer
@@ -188,7 +208,7 @@ definitions:
         description: 所属监听文件夹名称快照
         type: string
     type: object
-  rclone-sync-hub_internal_model.WatchFolder:
+  model.WatchFolder:
     properties:
       createdAt:
         type: string
@@ -261,7 +281,78 @@ definitions:
         description: 最近一段时间的窗口统计（可用于展示趋势）
         type: integer
     type: object
-  rclone-sync-hub_internal_service.TaskBatchResult:
+  service.DashboardData:
+    properties:
+      by_status:
+        description: ByStatus 按状态分布（饼图/柱状图）
+        items:
+          $ref: '#/definitions/service.StatusItemVO'
+        type: array
+      by_time:
+        description: ByTime 按日趋势（折线图）
+        items:
+          $ref: '#/definitions/service.TimeItemVO'
+        type: array
+      by_watch_folder:
+        description: ByWatchFolder 按监听文件夹分布（表格+柱状图）
+        items:
+          $ref: '#/definitions/service.WatchFolderItemVO'
+        type: array
+      items:
+        allOf:
+        - $ref: '#/definitions/service.DashboardItemsVO'
+        description: Items 列表类数据
+      overview:
+        allOf:
+        - $ref: '#/definitions/service.OverviewVO'
+        description: Overview 概览数字（卡片）
+    type: object
+  service.DashboardItemsVO:
+    properties:
+      failed_tasks:
+        items:
+          $ref: '#/definitions/model.UploadTask'
+        type: array
+      recent_tasks:
+        items:
+          $ref: '#/definitions/model.UploadTask'
+        type: array
+    type: object
+  service.OverviewVO:
+    properties:
+      recent_24h_completed:
+        type: integer
+      recent_24h_failed:
+        type: integer
+      task_failed:
+        type: integer
+      task_paused:
+        type: integer
+      task_pending:
+        type: integer
+      task_running:
+        type: integer
+      task_success:
+        type: integer
+      task_total:
+        type: integer
+      uploaded_bytes_total:
+        type: integer
+      uploaded_files_total:
+        type: integer
+      watch_folder_count:
+        type: integer
+    type: object
+  service.StatusItemVO:
+    properties:
+      count:
+        type: integer
+      label:
+        type: string
+      status:
+        type: string
+    type: object
+  service.TaskBatchResult:
     properties:
       failed:
         additionalProperties:
@@ -272,6 +363,40 @@ definitions:
         items:
           type: integer
         type: array
+    type: object
+  service.TimeItemVO:
+    properties:
+      completed_count:
+        type: integer
+      date:
+        type: string
+      failed_count:
+        type: integer
+      uploaded_bytes:
+        type: integer
+    type: object
+  service.WatchFolderItemVO:
+    properties:
+      failed_count:
+        type: integer
+      paused_count:
+        type: integer
+      pending_count:
+        type: integer
+      running_count:
+        type: integer
+      success_count:
+        type: integer
+      task_count:
+        type: integer
+      uploaded_bytes:
+        type: integer
+      uploaded_files:
+        type: integer
+      watch_folder_id:
+        type: integer
+      watch_folder_name:
+        type: string
     type: object
 host: localhost:8080
 info:
@@ -286,6 +411,32 @@ info:
   title: Rclone Sync Hub API
   version: "1.0"
 paths:
+  /api/analytics/dashboard:
+    get:
+      consumes:
+      - application/json
+      description: 返回概览数字、按状态/按监听文件夹/按时间趋势的图表数据，以及最近任务与失败任务列表，供数据分析页一次拉取
+      parameters:
+      - description: 趋势图天数，默认 7
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.DashboardData'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 数据分析仪表盘
+      tags:
+      - analytics
   /api/fs/subdirs:
     get:
       description: 根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）
@@ -301,7 +452,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_api.FSSubDirListResponse'
+            $ref: '#/definitions/api.FSSubDirListResponse'
         "400":
           description: Bad Request
           schema:
@@ -384,14 +535,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.TaskCreateReq'
+          $ref: '#/definitions/api.TaskCreateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
+            $ref: '#/definitions/model.UploadTask'
         "400":
           description: Bad Request
           schema:
@@ -440,6 +591,45 @@ paths:
       summary: 删除上传任务
       tags:
       - tasks
+  /api/tasks/{id}/logs:
+    get:
+      consumes:
+      - application/json
+      description: 按任务 ID 返回 upload_logs 中的日志列表，支持 limit 限制条数
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 最多返回条数，默认 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.UploadLog'
+            type: array
+        "400":
+          description: invalid id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 获取任务上传日志
+      tags:
+      - tasks
   /api/tasks/{id}/pause:
     post:
       description: 上传中的任务不可暂停
@@ -484,14 +674,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.TaskBatchReq'
+          $ref: '#/definitions/api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
+            $ref: '#/definitions/service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
@@ -512,14 +702,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.TaskBatchReq'
+          $ref: '#/definitions/api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
+            $ref: '#/definitions/service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
@@ -540,14 +730,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.TaskBatchReq'
+          $ref: '#/definitions/api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
+            $ref: '#/definitions/service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
@@ -602,14 +792,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.WatchFolderCreateReq'
+          $ref: '#/definitions/api.WatchFolderCreateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
+            $ref: '#/definitions/model.WatchFolder'
         "400":
           description: Bad Request
           schema:
@@ -664,7 +854,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
+            $ref: '#/definitions/model.WatchFolder'
         "404":
           description: Not Found
           schema:
@@ -688,14 +878,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_api.WatchFolderUpdateReq'
+          $ref: '#/definitions/api.WatchFolderUpdateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
+            $ref: '#/definitions/model.WatchFolder'
         "400":
           description: Bad Request
           schema:

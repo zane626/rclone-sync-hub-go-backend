@@ -104,9 +104,10 @@ func main() {
 	fileRepo := repository.NewFileRecordRepository(db)
 	logRepo := repository.NewUploadLogRepository(db)
 	watchFolderRepo := repository.NewWatchFolderRepository(db)
+	analyticsRepo := repository.NewAnalyticsRepository(db)
 
 	rc := rclone.NewClient(cfg.Rclone.BinPath)
-	q := worker.NewQueue(taskRepo, logRepo, fileRepo, rc,
+	q := worker.NewQueue(taskRepo, logRepo, fileRepo, watchFolderRepo, rc,
 		cfg.Worker.MaxConcurrent, cfg.Worker.MaxRetry, cfg.Worker.QueueSize,
 	)
 
@@ -123,20 +124,22 @@ func main() {
 	maxUploads := config.GetMaxConcurrentUploads()
 	taskScheduler := scheduler.NewTaskScheduler(taskRepo, q, maxUploads, 2*time.Second)
 
-	uploadSvc := service.NewUploadService(taskRepo, fileRepo, scanner, q)
+	uploadSvc := service.NewUploadService(taskRepo, fileRepo, logRepo, scanner, q)
 	rcloneSvc := service.NewRcloneService(rc)
 	watchFolderSvc := service.NewWatchFolderService(watchFolderRepo)
+	analyticsSvc := service.NewAnalyticsService(analyticsRepo)
 	fsSvc := service.NewFSService()
 	taskHandler := api.NewTaskHandler(uploadSvc)
 	healthHandler := api.NewHealthHandler()
 	rcloneHandler := api.NewRcloneHandler(rcloneSvc)
 	watchFolderHandler := api.NewWatchFolderHandler(watchFolderSvc)
+	analyticsHandler := api.NewAnalyticsHandler(analyticsSvc)
 	fsHandler := api.NewFSHandler(fsSvc)
 
 	// 5. 路由：/api 为 API，其余为前端静态 + fallback
 	r := gin.New()
 	r.Use(gin.Recovery())
-	api.Router(r, taskHandler, healthHandler, rcloneHandler, watchFolderHandler, fsHandler)
+	api.Router(r, taskHandler, healthHandler, rcloneHandler, watchFolderHandler, fsHandler, analyticsHandler)
 
 	// Swagger 文档：仅当配置开启时注册，生产环境务必关闭
 	if cfg.Server.EnableSwagger {

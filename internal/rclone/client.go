@@ -13,13 +13,16 @@ import (
 	"sync"
 )
 
-// Progress 单次进度快照。
+// Progress 单次进度快照。兼容 rclone 两种输出：数字格式与 "Transferred: ..." 格式。
 type Progress struct {
-	Percent   float64 // 0-100
-	BytesDone int64
+	Percent    float64 // 0-100
+	BytesDone  int64
 	BytesTotal int64
-	Speed     int64   // bytes/s
-	Message   string
+	Speed      int64  // bytes/s（可来自数字或解析 human 格式）
+	Message    string // 原始行
+	ETA        string // 预计剩余时间，如 "2m30s"（仅 Transferred 格式）
+	CurrentStr string // 已传输量 human 显示，如 "1.234M"
+	TotalStr   string // 总大小 human 显示，如 "10.5G"
 }
 
 // Result 一次 copy 的最终结果。
@@ -89,29 +92,46 @@ func (c *client) Copy(ctx context.Context, localPath, remoteName, remotePath str
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// 解析 --progress 输出格式，例如：
-	// 1234/5678, 22%, 1234, 12345/s, 0:00:30, ETA
+	// 两种进度格式：
+	// 1) 数字格式：1234/5678, 22%, 1234, 12345/s, 0:00:30, ETA
+	// 2) Transferred: 1.234M / 10.5G, 1%, 2.5 MB/s, ETA 2m30s
 	progressLine := regexp.MustCompile(`^\s*(\d+)/(\d+),\s*(\d+)%`)
+	transferredLine := regexp.MustCompile(`Transferred:\s+([\d.]+\s*\w*)\s*/\s*([\d.]+\s*\w*),\s*(\d+)%,\s*([\d.]+\s*\w*/s),\s*ETA\s+([\dwdhms]+)`)
 
 	go func() {
 		defer wg.Done()
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
 			line := sc.Text()
-			if onProgress != nil {
-				if m := progressLine.FindStringSubmatch(line); len(m) >= 4 {
-					done, _ := strconv.ParseInt(m[1], 10, 64)
-					total, _ := strconv.ParseInt(m[2], 10, 64)
-					pct, _ := strconv.ParseFloat(m[3], 64)
-					onProgress(Progress{
-						Percent:   pct,
-						BytesDone: done,
-						BytesTotal: total,
-						Message:   line,
-					})
-				} else if strings.TrimSpace(line) != "" {
-					onProgress(Progress{Message: line})
-				}
+			if onProgress == nil {
+				continue
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if m := transferredLine.FindStringSubmatch(line); len(m) >= 6 {
+				pct, _ := strconv.ParseFloat(m[3], 64)
+				onProgress(Progress{
+					Percent:    pct,
+					Message:    line,
+					ETA:        m[5],
+					CurrentStr: strings.TrimSpace(m[1]),
+					TotalStr:   strings.TrimSpace(m[2]),
+					// Speed 为 human 格式如 "2.5 MB/s"，暂不解析为 bytes/s
+				})
+			} else if m := progressLine.FindStringSubmatch(line); len(m) >= 4 {
+				done, _ := strconv.ParseInt(m[1], 10, 64)
+				total, _ := strconv.ParseInt(m[2], 10, 64)
+				pct, _ := strconv.ParseFloat(m[3], 64)
+				onProgress(Progress{
+					Percent:   pct,
+					BytesDone: done,
+					BytesTotal: total,
+					Message:   line,
+				})
+			} else {
+				onProgress(Progress{Message: line})
 			}
 		}
 	}()

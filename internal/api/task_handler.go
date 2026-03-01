@@ -4,6 +4,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"rclone-sync-hub/internal/model"
 	"rclone-sync-hub/internal/service"
@@ -23,11 +24,12 @@ func NewTaskHandler(svc service.UploadService) *TaskHandler {
 
 // ListTasks 分页获取上传任务列表
 // @Summary      分页获取上传任务列表
-// @Description  按状态筛选并分页返回上传任务，不传 status 时返回全部
+// @Description  按状态筛选并分页返回上传任务，不传 status 时返回全部；keyword 对 watch_folder_name/file_name/local_path/remote_name/remote_path 模糊查询
 // @Tags         tasks
 // @Accept       json
 // @Produce      json
 // @Param        status    query    string  false  "任务状态: pending|running|success|failed，空为全部"
+// @Param        keyword   query    string  false  "关键词：对所属文件夹名/文件名/本地路径/网盘名/上传路径模糊查询"
 // @Param        page      query    int     false  "页码，从 1 开始"     default(1)
 // @Param        page_size query    int     false  "每页条数"            default(20)
 // @Success      200  {object}  map[string]interface{}  "items 为任务列表，total 为总条数"
@@ -35,18 +37,21 @@ func NewTaskHandler(svc service.UploadService) *TaskHandler {
 // @Router       /api/tasks [get]
 func (h *TaskHandler) ListTasks(c *gin.Context) {
 	status := c.DefaultQuery("status", "")
+	keyword := strings.TrimSpace(c.DefaultQuery("keyword", ""))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	list, total, err := h.svc.ListTasks(c.Request.Context(), status, page, pageSize)
+	list, total, err := h.svc.ListTasks(c.Request.Context(), status, keyword, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"items": list,
-		"total": total,
-		"page":  page,
+		"items":     list,
+		"total":     total,
+		"page":      page,
 		"page_size": pageSize,
+		"status":    status,
+		"keyword":   keyword,
 	})
 }
 
@@ -64,6 +69,34 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, task)
+}
+
+// GetTaskLogs 获取指定任务的上传日志（upload_logs 表，按时间倒序）
+// @Summary      获取任务上传日志
+// @Description  按任务 ID 返回 upload_logs 中的日志列表，支持 limit 限制条数
+// @Tags         tasks
+// @Accept       json
+// @Produce      json
+// @Param        id     path    int   true   "任务 ID"
+// @Param        limit  query   int   false  "最多返回条数，默认 500"
+// @Success      200  {array}  model.UploadLog
+// @Failure      400  {object}  map[string]string  "invalid id"
+// @Failure      500  {object}  map[string]string  "error"
+// @Router       /api/tasks/{id}/logs [get]
+func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
+	logs, err := h.svc.GetTaskLogs(c.Request.Context(), uint(id), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, logs)
 }
 
 // TriggerScan  POST /api/scan

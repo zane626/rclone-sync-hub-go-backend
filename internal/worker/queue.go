@@ -31,16 +31,17 @@ type Queue interface {
 }
 
 type queue struct {
-	taskRepo      repository.TaskRepository
-	logRepo       repository.UploadLogRepository
-	fileRepo      repository.FileRecordRepository
-	rclone        rclone.Client
-	maxConcurrent int
-	maxRetry      int
-	queueSize     int
-	ch            chan TaskMessage
-	wg            sync.WaitGroup
-	onProgress    ProgressCallback
+	taskRepo         repository.TaskRepository
+	logRepo          repository.UploadLogRepository
+	fileRepo         repository.FileRecordRepository
+	watchFolderRepo  repository.WatchFolderRepository
+	rclone           rclone.Client
+	maxConcurrent    int
+	maxRetry         int
+	queueSize        int
+	ch               chan TaskMessage
+	wg               sync.WaitGroup
+	onProgress       ProgressCallback
 }
 
 // QueueOption 可选配置。
@@ -53,11 +54,12 @@ func WithProgressCallback(fn ProgressCallback) QueueOption {
 	}
 }
 
-// NewQueue 创建任务队列。上传时使用任务表 upload_tasks 的 remote_name、remote_path，不再从配置注入。
+// NewQueue 创建任务队列。上传时使用任务表 upload_tasks 的 remote_name、remote_path；完成后会更新 watch_folders 统计。
 func NewQueue(
 	taskRepo repository.TaskRepository,
 	logRepo repository.UploadLogRepository,
 	fileRepo repository.FileRecordRepository,
+	watchFolderRepo repository.WatchFolderRepository,
 	rc rclone.Client,
 	maxConcurrent, maxRetry, queueSize int,
 	opts ...QueueOption,
@@ -66,14 +68,15 @@ func NewQueue(
 		queueSize = 100
 	}
 	q := &queue{
-		taskRepo:      taskRepo,
-		logRepo:       logRepo,
-		fileRepo:      fileRepo,
-		rclone:        rc,
-		maxConcurrent: maxConcurrent,
-		maxRetry:      maxRetry,
-		queueSize:     queueSize,
-		ch:            make(chan TaskMessage, queueSize),
+		taskRepo:        taskRepo,
+		logRepo:         logRepo,
+		fileRepo:        fileRepo,
+		watchFolderRepo: watchFolderRepo,
+		rclone:          rc,
+		maxConcurrent:   maxConcurrent,
+		maxRetry:        maxRetry,
+		queueSize:       queueSize,
+		ch:              make(chan TaskMessage, queueSize),
 	}
 	for _, o := range opts {
 		o(q)
@@ -193,11 +196,13 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 			zap.Int("max_retry", q.maxRetry),
 		)
 
+		// 进度节流：至少间隔 progressThrottle 才更新任务表，避免过于频繁写 DB
+		const progressThrottle = time.Second
+		var lastProgressAt time.Time
+
 		res, err = q.rclone.Copy(ctx, localPath, remoteName, remotePath, func(p rclone.Progress) {
-			if q.onProgress != nil {
-				q.onProgress(taskID, p.Percent, p.BytesDone, p.BytesTotal, p.Speed, p.Message)
-			}
-			// 可选：写入 upload_logs
+			now := time.Now()
+			// 每条输出都写入 upload_logs，不写 task 表
 			_ = q.logRepo.Create(&model.UploadLog{
 				TaskID:     taskID,
 				Percent:    p.Percent,
@@ -206,6 +211,30 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 				Speed:      p.Speed,
 				Message:    p.Message,
 			})
+
+			// 有进度数据且距上次更新超过节流间隔时，仅更新任务进度字段（Progress/Speed/LastProgressAt），不更新 Log
+			hasProgress := p.Percent > 0 || p.BytesDone > 0 || p.BytesTotal > 0 || p.ETA != ""
+			if hasProgress && now.Sub(lastProgressAt) >= progressThrottle {
+				lastProgressAt = now
+				task.Progress = p.Percent
+				task.Speed = p.Speed
+				task.LastProgressAt = &now
+				if errUpd := q.taskRepo.Update(task); errUpd != nil {
+					logger.L.Debug("worker: progress update failed", zap.Uint("taskID", taskID), zap.Error(errUpd))
+				}
+				logger.L.Debug("worker: progress",
+					zap.Uint("taskID", taskID),
+					zap.Float64("percent", p.Percent),
+					zap.Int64("speed", p.Speed),
+					zap.String("eta", p.ETA),
+					zap.String("current", p.CurrentStr),
+					zap.String("total", p.TotalStr),
+				)
+			}
+
+			if q.onProgress != nil {
+				q.onProgress(taskID, p.Percent, p.BytesDone, p.BytesTotal, p.Speed, p.Message)
+			}
 		})
 
 		if err == nil && res.Success {
@@ -222,16 +251,19 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 		)
 	}
 
-	// 更新任务状态与 file_record.uploaded_at
+	// 更新任务状态与 file_record.uploaded_at；结果日志写入 upload_logs，不写 task 表
 	finished := time.Now()
 	duration := finished.Sub(uploadStart)
 	task.FinishedAt = &finished
+	task.DurationSeconds = int64(duration.Seconds())
 
 	if err == nil && res.Success {
 		task.Status = model.TaskStatusSuccess
 		task.ErrorMsg = ""
 		task.FileRecord.UploadedAt = &finished
 		_ = q.fileRepo.Update(task.FileRecord)
+		_ = q.logRepo.Create(&model.UploadLog{TaskID: taskID, Message: "Rclone 命令执行成功"})
+		q.updateWatchFolderOnSuccess(task, finished)
 		logger.L.Info("worker: upload success",
 			zap.Uint("taskID", taskID),
 			zap.Int("workerID", workerID),
@@ -245,6 +277,8 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 		} else if err != nil {
 			task.ErrorMsg = err.Error()
 		}
+		_ = q.logRepo.Create(&model.UploadLog{TaskID: taskID, Message: "Rclone 命令执行失败: " + task.ErrorMsg})
+		q.updateWatchFolderOnFailure(task, finished)
 		logger.L.Warn("worker: upload failed",
 			zap.Uint("taskID", taskID),
 			zap.Int("workerID", workerID),
@@ -259,4 +293,50 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 		return
 	}
 	logger.L.Debug("worker: processOne done", zap.Uint("taskID", taskID), zap.String("status", task.Status))
+}
+
+// updateWatchFolderOnSuccess 上传成功后更新 watch_folders：累计上传文件数、累计上传字节数、最近同步时间等。
+func (q *queue) updateWatchFolderOnSuccess(task *model.UploadTask, finished time.Time) {
+	if task.WatchFolderID == 0 {
+		return
+	}
+	wf, err := q.watchFolderRepo.GetByID(task.WatchFolderID)
+	if err != nil || wf == nil {
+		logger.L.Debug("worker: watch folder not found for success update", zap.Uint("watchFolderID", task.WatchFolderID), zap.Error(err))
+		return
+	}
+	fileSize := task.FileSize
+	if fileSize <= 0 && task.FileRecord != nil {
+		fileSize = task.FileRecord.FileSize
+	}
+	wf.UploadedFileCount++
+	wf.UploadedBytes += fileSize
+	wf.LastSyncAt = &finished
+	wf.LastActiveAt = &finished
+	wf.WindowUploadedFiles++
+	wf.WindowUploadedBytes += fileSize
+	if err := q.watchFolderRepo.Update(wf); err != nil {
+		logger.L.Warn("worker: update watch_folder stats failed", zap.Uint("watchFolderID", wf.ID), zap.Error(err))
+		return
+	}
+	logger.L.Debug("worker: watch_folder stats updated",
+		zap.Uint("watchFolderID", wf.ID),
+		zap.Int64("uploadedFileCount", wf.UploadedFileCount),
+		zap.Int64("uploadedBytes", wf.UploadedBytes),
+		zap.Int64("fileSize", fileSize),
+	)
+}
+
+// updateWatchFolderOnFailure 上传失败后更新 watch_folders：累计失败文件数、最近活动时间。
+func (q *queue) updateWatchFolderOnFailure(task *model.UploadTask, finished time.Time) {
+	if task.WatchFolderID == 0 {
+		return
+	}
+	wf, err := q.watchFolderRepo.GetByID(task.WatchFolderID)
+	if err != nil || wf == nil {
+		return
+	}
+	wf.FailedFileCount++
+	wf.LastActiveAt = &finished
+	_ = q.watchFolderRepo.Update(wf)
 }

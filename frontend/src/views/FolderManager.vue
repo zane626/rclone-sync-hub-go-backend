@@ -141,16 +141,16 @@ const tableData = ref([]);
 
 const statusOptions = [
   { label: '全部', value: null },
-  { label: '检测中 detecting', value: 'detecting' },
-  { label: '监听中 watching', value: 'watching' },
-  { label: '已停止 stopped', value: 'stopped' },
-  { label: '已暂停 paused', value: 'paused' },
-  { label: '异常 error', value: 'error' }
+  { label: '检测中', value: 'detecting' },
+  { label: '监听中', value: 'watching' },
+  { label: '已停止', value: 'stopped' },
+  { label: '已暂停', value: 'paused' },
+  { label: '异常', value: 'error' }
 ];
 
 const syncTypeOptions = [
   { label: '本地 -> 远端 (local_to_remote)', value: 'local_to_remote' },
-  { label: '远端 -> 本地 (remote_to_local)', value: 'remote_to_local' }
+  // { label: '远端 -> 本地 (remote_to_local)', value: 'remote_to_local' }
 ];
 
 const filter = ref({
@@ -344,6 +344,7 @@ async function loadData() {
   try {
     const res = await fetchWatchFolders({
       status: filter.value.status || undefined,
+      keyword: filter.value.keyword || undefined,
       page: pagination.value.page,
       page_size: pagination.value.pageSize
     });

@@ -14,8 +14,8 @@ type WatchFolderRepository interface {
 	GetByID(id uint) (*model.WatchFolder, error)
 	Update(f *model.WatchFolder) error
 	Delete(id uint) error
-	// List 按状态分页查询，status 为空则不过滤。
-	List(status string, offset, limit int) ([]model.WatchFolder, int64, error)
+	// List 按状态分页查询，status 为空则不过滤；keyword 非空时对 name/local_path/remote_name/remote_path 模糊查询。
+	List(status, keyword string, offset, limit int) ([]model.WatchFolder, int64, error)
 }
 
 type watchFolderRepository struct {
@@ -56,7 +56,7 @@ func (r *watchFolderRepository) Delete(id uint) error {
 	return nil
 }
 
-func (r *watchFolderRepository) List(status string, offset, limit int) ([]model.WatchFolder, int64, error) {
+func (r *watchFolderRepository) List(status, keyword string, offset, limit int) ([]model.WatchFolder, int64, error) {
 	var list []model.WatchFolder
 	var total int64
 
@@ -64,14 +64,19 @@ func (r *watchFolderRepository) List(status string, offset, limit int) ([]model.
 	if status != "" {
 		q = q.Where("status = ?", status)
 	}
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		q = q.Where("name LIKE ? OR local_path LIKE ? OR remote_name LIKE ? OR remote_path LIKE ?", like, like, like, like)
+	}
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("watch_folder count: %w", err)
 	}
 
+	q = q.Order("created_at DESC")
 	if limit > 0 {
 		q = q.Offset(offset).Limit(limit)
 	}
-	if err := q.Order("id DESC").Find(&list).Error; err != nil {
+	if err := q.Find(&list).Error; err != nil {
 		return nil, 0, fmt.Errorf("watch_folder list: %w", err)
 	}
 	return list, total, nil

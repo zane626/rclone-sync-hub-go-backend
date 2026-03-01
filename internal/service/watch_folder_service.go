@@ -14,7 +14,7 @@ type WatchFolderService interface {
 	Update(ctx context.Context, id uint, in UpdateWatchFolderInput) (*model.WatchFolder, error)
 	Delete(ctx context.Context, id uint) error
 	Get(ctx context.Context, id uint) (*model.WatchFolder, error)
-	List(ctx context.Context, status string, page, pageSize int) ([]model.WatchFolder, int64, error)
+	List(ctx context.Context, status, keyword string, page, pageSize int) ([]model.WatchFolder, int64, error)
 }
 
 type watchFolderService struct {
@@ -124,7 +124,7 @@ func (s *watchFolderService) Get(ctx context.Context, id uint) (*model.WatchFold
 	return s.repo.GetByID(id)
 }
 
-func (s *watchFolderService) List(ctx context.Context, status string, page, pageSize int) ([]model.WatchFolder, int64, error) {
+func (s *watchFolderService) List(ctx context.Context, status, keyword string, page, pageSize int) ([]model.WatchFolder, int64, error) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
@@ -132,5 +132,5 @@ func (s *watchFolderService) List(ctx context.Context, status string, page, page
 		page = 1
 	}
 	offset := (page - 1) * pageSize
-	return s.repo.List(status, offset, pageSize)
+	return s.repo.List(status, keyword, offset, pageSize)
 }

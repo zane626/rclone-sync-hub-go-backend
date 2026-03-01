@@ -15,8 +15,8 @@ import (
 
 // UploadService 上传相关业务接口。
 type UploadService interface {
-	// ListTasks 分页列出任务，按状态筛选。
-	ListTasks(ctx context.Context, status string, page, pageSize int) ([]model.UploadTask, int64, error)
+	// ListTasks 分页列出任务，按状态筛选；keyword 非空时对 watch_folder_name/file_name/local_path/remote_name/remote_path 模糊查询。
+	ListTasks(ctx context.Context, status, keyword string, page, pageSize int) ([]model.UploadTask, int64, error)
 	// GetTask 获取单条任务详情。
 	GetTask(ctx context.Context, id uint) (*model.UploadTask, error)
 	// CreateTask 新建上传任务。
@@ -37,6 +37,8 @@ type UploadService interface {
 	GetStats(ctx context.Context) (pending, running, success, failed int64, err error)
 	// SubmitTask 将已有任务 ID 再次入队（用于重试 failed 等）。
 	SubmitTask(ctx context.Context, taskID uint) error
+	// GetTaskLogs 获取指定任务的上传日志（来自 upload_logs 表），limit 为 0 时默认 500。
+	GetTaskLogs(ctx context.Context, taskID uint, limit int) ([]model.UploadLog, error)
 }
 
 func (s *uploadService) GetTask(ctx context.Context, id uint) (*model.UploadTask, error) {
@@ -93,9 +95,17 @@ func (s *uploadService) SubmitTask(ctx context.Context, taskID uint) error {
 	return s.queue.Submit(ctx, taskID)
 }
 
+func (s *uploadService) GetTaskLogs(ctx context.Context, taskID uint, limit int) ([]model.UploadLog, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	return s.logRepo.ListByTaskID(taskID, limit)
+}
+
 type uploadService struct {
 	taskRepo repository.TaskRepository
 	fileRepo repository.FileRecordRepository
+	logRepo  repository.UploadLogRepository
 	scanner  scheduler.Scanner
 	queue    worker.Queue
 }
@@ -104,18 +114,20 @@ type uploadService struct {
 func NewUploadService(
 	taskRepo repository.TaskRepository,
 	fileRepo repository.FileRecordRepository,
+	logRepo repository.UploadLogRepository,
 	scanner scheduler.Scanner,
 	queue worker.Queue,
 ) UploadService {
 	return &uploadService{
 		taskRepo: taskRepo,
 		fileRepo: fileRepo,
+		logRepo:  logRepo,
 		scanner:  scanner,
 		queue:    queue,
 	}
 }
 
-func (s *uploadService) ListTasks(ctx context.Context, status string, page, pageSize int) ([]model.UploadTask, int64, error) {
+func (s *uploadService) ListTasks(ctx context.Context, status, keyword string, page, pageSize int) ([]model.UploadTask, int64, error) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
@@ -123,11 +135,11 @@ func (s *uploadService) ListTasks(ctx context.Context, status string, page, page
 		page = 1
 	}
 	offset := (page - 1) * pageSize
-	list, err := s.taskRepo.List(status, offset, pageSize)
+	list, err := s.taskRepo.List(status, keyword, offset, pageSize)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := s.taskRepo.CountByStatus(status)
+	total, err := s.taskRepo.CountForList(status, keyword)
 	if err != nil {
 		return nil, 0, err
 	}

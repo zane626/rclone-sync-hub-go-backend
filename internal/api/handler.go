@@ -11,13 +11,16 @@ func Router(
 	rcloneHandler *RcloneHandler,
 	watchHandler *WatchFolderHandler,
 	fsHandler *FSHandler,
+	analyticsHandler *AnalyticsHandler,
 ) {
 	api := r.Group("/api")
 	{
 		api.GET("/health", health.Ping)
+		api.GET("/analytics/dashboard", analyticsHandler.GetDashboard)
 		api.GET("/stats", task.GetStats)
 		api.GET("/tasks", task.ListTasks)
 		api.GET("/tasks/:id", task.GetTask)
+		api.GET("/tasks/:id/logs", task.GetTaskLogs)
 		api.POST("/tasks", task.CreateTask)
 		api.POST("/tasks/:id/retry", task.SubmitTask)
 		api.POST("/tasks/:id/pause", task.PauseTask)

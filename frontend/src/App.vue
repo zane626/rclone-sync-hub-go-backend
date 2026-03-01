@@ -18,17 +18,7 @@
                   @update:value="handleMenuSelect"
                 />
               </div>
-              <div class="app-header-right">
-                <n-button
-                  quaternary
-                  round
-                  class="app-header-btn"
-                  @click="goSettings"
-                >
-                  <span class="btn-icon">⚙</span>
-                  设置
-                </n-button>
-              </div>
+              <!-- 设置入口已暂时屏蔽 -->
             </n-layout-header>
             <n-layout-content content-style="padding: 0; display: flex; flex-direction: column; min-height: 0;" class="app-content">
               <div class="app-content-scroll">
@@ -41,6 +31,15 @@
                 </router-view>
               </div>
             </n-layout-content>
+            <n-layout-footer class="app-footer">
+              <div class="app-footer-inner">
+                <span class="app-footer-item">{{ footer.projectName }}</span>
+                <span class="app-footer-sep">·</span>
+                <span class="app-footer-item">v{{ footer.version }}</span>
+                <span class="app-footer-sep">·</span>
+                <a :href="footer.githubUrl" target="_blank" rel="noopener noreferrer" class="app-footer-link">GitHub</a>
+              </div>
+            </n-layout-footer>
           </n-layout>
         </n-dialog-provider>
       </n-message-provider>
@@ -56,9 +55,17 @@ import {
   NLayout,
   NLayoutHeader,
   NLayoutContent,
+  NLayoutFooter,
   NMenu,
   NButton
 } from 'naive-ui';
+import pkg from '../package.json';
+
+const footer = {
+  projectName: 'Rclone Sync Hub',
+  version: pkg.version,
+  githubUrl: 'https://github.com/rclone/rclone-sync-hub-go-backend'
+};
 
 const router = useRouter();
 const route = useRoute();
@@ -94,10 +101,6 @@ const themeOverrides = {
 
 function handleMenuSelect(key) {
   router.push(key);
-}
-
-function goSettings() {
-  router.push('/settings');
 }
 </script>
 
@@ -210,6 +213,40 @@ function goSettings() {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.app-footer {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  background: var(--card-bg);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.app-footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.app-footer-item {
+  color: #64748b;
+}
+
+.app-footer-sep {
+  color: #cbd5e1;
+  user-select: none;
+}
+
+.app-footer-link {
+  color: var(--app-primary);
+  text-decoration: none;
+}
+
+.app-footer-link:hover {
+  text-decoration: underline;
 }
 
 .page-fade-enter-active,

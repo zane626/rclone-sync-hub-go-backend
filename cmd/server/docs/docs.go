@@ -23,6 +23,46 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/analytics/dashboard": {
+            "get": {
+                "description": "返回概览数字、按状态/按监听文件夹/按时间趋势的图表数据，以及最近任务与失败任务列表，供数据分析页一次拉取",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "数据分析仪表盘",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "趋势图天数，默认 7",
+                        "name": "days",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.DashboardData"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/fs/subdirs": {
             "get": {
                 "description": "根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）",
@@ -46,7 +86,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api.FSSubDirListResponse"
+                            "$ref": "#/definitions/api.FSSubDirListResponse"
                         }
                     },
                     "400": {
@@ -173,7 +213,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.TaskCreateReq"
+                            "$ref": "#/definitions/api.TaskCreateReq"
                         }
                     }
                 ],
@@ -181,7 +221,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadTask"
+                            "$ref": "#/definitions/model.UploadTask"
                         }
                     },
                     "400": {
@@ -225,7 +265,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.TaskBatchReq"
+                            "$ref": "#/definitions/api.TaskBatchReq"
                         }
                     }
                 ],
@@ -233,7 +273,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
+                            "$ref": "#/definitions/service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -268,7 +308,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.TaskBatchReq"
+                            "$ref": "#/definitions/api.TaskBatchReq"
                         }
                     }
                 ],
@@ -276,7 +316,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
+                            "$ref": "#/definitions/service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -311,7 +351,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.TaskBatchReq"
+                            "$ref": "#/definitions/api.TaskBatchReq"
                         }
                     }
                 ],
@@ -319,7 +359,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
+                            "$ref": "#/definitions/service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -374,6 +414,65 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/tasks/{id}/logs": {
+            "get": {
+                "description": "按任务 ID 返回 upload_logs 中的日志列表，支持 limit 限制条数",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "获取任务上传日志",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "最多返回条数，默认 500",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.UploadLog"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -504,7 +603,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.WatchFolderCreateReq"
+                            "$ref": "#/definitions/api.WatchFolderCreateReq"
                         }
                     }
                 ],
@@ -512,7 +611,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
+                            "$ref": "#/definitions/model.WatchFolder"
                         }
                     },
                     "400": {
@@ -558,7 +657,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
+                            "$ref": "#/definitions/model.WatchFolder"
                         }
                     },
                     "404": {
@@ -597,7 +696,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api.WatchFolderUpdateReq"
+                            "$ref": "#/definitions/api.WatchFolderUpdateReq"
                         }
                     }
                 ],
@@ -605,7 +704,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
+                            "$ref": "#/definitions/model.WatchFolder"
                         }
                     },
                     "400": {
@@ -669,7 +768,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "internal_api.FSSubDir": {
+        "api.FSSubDir": {
             "type": "object",
             "properties": {
                 "has_sub_dirs": {
@@ -683,18 +782,18 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api.FSSubDirListResponse": {
+        "api.FSSubDirListResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_api.FSSubDir"
+                        "$ref": "#/definitions/api.FSSubDir"
                     }
                 }
             }
         },
-        "internal_api.TaskBatchReq": {
+        "api.TaskBatchReq": {
             "type": "object",
             "required": [
                 "ids"
@@ -709,7 +808,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api.TaskCreateReq": {
+        "api.TaskCreateReq": {
             "type": "object",
             "required": [
                 "local_path",
@@ -740,7 +839,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api.WatchFolderCreateReq": {
+        "api.WatchFolderCreateReq": {
             "type": "object",
             "required": [
                 "local_path",
@@ -775,7 +874,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api.WatchFolderUpdateReq": {
+        "api.WatchFolderUpdateReq": {
             "type": "object",
             "properties": {
                 "enabled": {
@@ -807,7 +906,7 @@ const docTemplate = `{
                 }
             }
         },
-        "rclone-sync-hub_internal_model.FileRecord": {
+        "model.FileRecord": {
             "type": "object",
             "properties": {
                 "createdAt": {
@@ -841,7 +940,37 @@ const docTemplate = `{
                 }
             }
         },
-        "rclone-sync-hub_internal_model.UploadTask": {
+        "model.UploadLog": {
+            "type": "object",
+            "properties": {
+                "bytesDone": {
+                    "type": "integer"
+                },
+                "bytesTotal": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "number"
+                },
+                "speed": {
+                    "description": "bytes/s",
+                    "type": "integer"
+                },
+                "taskID": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.UploadTask": {
             "type": "object",
             "properties": {
                 "accumulatedFailures": {
@@ -867,7 +996,7 @@ const docTemplate = `{
                     "description": "关联（不参与表结构，仅查询用）",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/rclone-sync-hub_internal_model.FileRecord"
+                            "$ref": "#/definitions/model.FileRecord"
                         }
                     ]
                 },
@@ -942,7 +1071,7 @@ const docTemplate = `{
                 }
             }
         },
-        "rclone-sync-hub_internal_model.WatchFolder": {
+        "model.WatchFolder": {
             "type": "object",
             "properties": {
                 "createdAt": {
@@ -1040,7 +1169,118 @@ const docTemplate = `{
                 }
             }
         },
-        "rclone-sync-hub_internal_service.TaskBatchResult": {
+        "service.DashboardData": {
+            "type": "object",
+            "properties": {
+                "by_status": {
+                    "description": "ByStatus 按状态分布（饼图/柱状图）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.StatusItemVO"
+                    }
+                },
+                "by_time": {
+                    "description": "ByTime 按日趋势（折线图）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.TimeItemVO"
+                    }
+                },
+                "by_watch_folder": {
+                    "description": "ByWatchFolder 按监听文件夹分布（表格+柱状图）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.WatchFolderItemVO"
+                    }
+                },
+                "items": {
+                    "description": "Items 列表类数据",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/service.DashboardItemsVO"
+                        }
+                    ]
+                },
+                "overview": {
+                    "description": "Overview 概览数字（卡片）",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/service.OverviewVO"
+                        }
+                    ]
+                }
+            }
+        },
+        "service.DashboardItemsVO": {
+            "type": "object",
+            "properties": {
+                "failed_tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.UploadTask"
+                    }
+                },
+                "recent_tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.UploadTask"
+                    }
+                }
+            }
+        },
+        "service.OverviewVO": {
+            "type": "object",
+            "properties": {
+                "recent_24h_completed": {
+                    "type": "integer"
+                },
+                "recent_24h_failed": {
+                    "type": "integer"
+                },
+                "task_failed": {
+                    "type": "integer"
+                },
+                "task_paused": {
+                    "type": "integer"
+                },
+                "task_pending": {
+                    "type": "integer"
+                },
+                "task_running": {
+                    "type": "integer"
+                },
+                "task_success": {
+                    "type": "integer"
+                },
+                "task_total": {
+                    "type": "integer"
+                },
+                "uploaded_bytes_total": {
+                    "type": "integer"
+                },
+                "uploaded_files_total": {
+                    "type": "integer"
+                },
+                "watch_folder_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.StatusItemVO": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.TaskBatchResult": {
             "type": "object",
             "properties": {
                 "failed": {
@@ -1055,6 +1295,58 @@ const docTemplate = `{
                     "items": {
                         "type": "integer"
                     }
+                }
+            }
+        },
+        "service.TimeItemVO": {
+            "type": "object",
+            "properties": {
+                "completed_count": {
+                    "type": "integer"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "failed_count": {
+                    "type": "integer"
+                },
+                "uploaded_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.WatchFolderItemVO": {
+            "type": "object",
+            "properties": {
+                "failed_count": {
+                    "type": "integer"
+                },
+                "paused_count": {
+                    "type": "integer"
+                },
+                "pending_count": {
+                    "type": "integer"
+                },
+                "running_count": {
+                    "type": "integer"
+                },
+                "success_count": {
+                    "type": "integer"
+                },
+                "task_count": {
+                    "type": "integer"
+                },
+                "uploaded_bytes": {
+                    "type": "integer"
+                },
+                "uploaded_files": {
+                    "type": "integer"
+                },
+                "watch_folder_id": {
+                    "type": "integer"
+                },
+                "watch_folder_name": {
+                    "type": "string"
                 }
             }
         }
