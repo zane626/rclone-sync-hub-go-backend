@@ -28,8 +28,9 @@ type WatchFolder struct {
 	RemoteName string `gorm:"size:255;not null"`                        // rclone remote 名称
 	RemotePath string `gorm:"size:1024;not null"`                       // 远端路径
 	SyncType   string `gorm:"size:64;not null;default:local_to_remote"` // 同步类型
-	MaxDepth   int    `gorm:"default:0"`                                // 最大监听深度，0 表示不限制
-	Enabled    bool   `gorm:"not null;default:true"`                    // 是否启用该监听
+	MaxDepth        int    `gorm:"default:0"`                                // 最大监听深度，0 表示不限制
+	FilterKeywords  string `gorm:"type:text"`                                // 过滤关键字，多行存储，每行一个；路径或文件名包含任一关键字（模糊匹配）则排除
+	Enabled         bool   `gorm:"not null;default:true"`                    // 是否启用该监听
 
 	// 状态信息
 	Status       string     `gorm:"size:32;not null;index"` // detecting / watching / stopped / paused / error

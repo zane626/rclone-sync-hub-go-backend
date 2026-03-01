@@ -29,8 +29,8 @@ services:
       # 日志
       LOG_LEVEL: info
       LOG_FORMAT: json
-      # 可选：RCLONE_BIN_PATH 默认 rclone
     volumes:
+      # 本地目录需要挂载到 /volumes
       - ./data/local:/volumes:ro
       - ./rclone:/root/.config/rclone:ro
     depends_on:
@@ -39,22 +39,22 @@ services:
 
   mysql:
     image: mysql:8.0
+    container_name: rclone-sync-hub-go-mysql_container
+    command:
+      - --default-authentication-plugin=caching_sha2_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --explicit_defaults_for_timestamp=true
+      - --bind-address=0.0.0.0
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: rclone_sync_hub
       MYSQL_USER: app
       MYSQL_PASSWORD: apppassword
     volumes:
-      - mysql_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
+      - ./mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
-      interval: 5s
-      timeout: 5s
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 3s
       retries: 5
-      start_period: 10s
-
-volumes:
-  mysql_data:
-  rclone-config:
+      start_period: 30s

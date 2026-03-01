@@ -16,6 +16,36 @@ import (
 	"go.uber.org/zap"
 )
 
+// parseFilterKeywords 从多行文本解析过滤关键字：按换行分割，每行去除首尾空格，忽略空行。
+func parseFilterKeywords(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	var out []string
+	for _, line := range lines {
+		k := strings.TrimSpace(line)
+		if k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// matchFilterKeywords 判断 path 或文件名是否包含任一关键字（模糊匹配）。
+func matchFilterKeywords(path string, keywords []string) bool {
+	if len(keywords) == 0 {
+		return false
+	}
+	base := filepath.Base(path)
+	for _, k := range keywords {
+		if strings.Contains(path, k) || strings.Contains(base, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // WatchFolderScanner 从 watch_folders 中读取状态为 watching 的记录，遍历本地目录并在需要时创建上传任务。
 type WatchFolderScanner interface {
 	Run(ctx context.Context)
@@ -146,10 +176,18 @@ func (s *watchFolderScanner) scanFolder(ctx context.Context, wf *model.WatchFold
 
 	rootDepth := depth(root)
 	created := 0
+	filterKeywords := parseFilterKeywords(wf.FilterKeywords)
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		// 过滤规则：路径或名称包含任一关键字则排除
+		if matchFilterKeywords(path, filterKeywords) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		// 深度控制
 		if info.IsDir() {

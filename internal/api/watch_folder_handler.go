@@ -23,13 +23,14 @@ func NewWatchFolderHandler(svc service.WatchFolderService) *WatchFolderHandler {
 
 // WatchFolderCreateReq 创建监听文件夹的请求体。
 type WatchFolderCreateReq struct {
-	Name               string `json:"name" binding:"required"`
-	LocalPath          string `json:"local_path" binding:"required"`
-	RemoteName         string `json:"remote_name" binding:"required"`
-	RemotePath         string `json:"remote_path" binding:"required"`
-	SyncType           string `json:"sync_type"`             // 可选，默认 local_to_remote
-	MaxDepth           int    `json:"max_depth"`             // 可选，0 表示不限制
-	ScanIntervalSecond int    `json:"scan_interval_seconds"` // 可选，默认 300
+	Name                string `json:"name" binding:"required"`
+	LocalPath           string `json:"local_path" binding:"required"`
+	RemoteName          string `json:"remote_name" binding:"required"`
+	RemotePath          string `json:"remote_path" binding:"required"`
+	SyncType            string `json:"sync_type"`              // 可选，默认 local_to_remote
+	MaxDepth            int    `json:"max_depth"`              // 可选，0 表示不限制
+	FilterKeywords      string `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
+	ScanIntervalSecond  int    `json:"scan_interval_seconds"` // 可选，默认 300
 }
 
 // WatchFolderUpdateReq 更新监听文件夹的请求体（全部可选）。
@@ -40,6 +41,7 @@ type WatchFolderUpdateReq struct {
 	RemotePath         *string `json:"remote_path"`
 	SyncType           *string `json:"sync_type"`
 	MaxDepth           *int    `json:"max_depth"`
+	FilterKeywords     *string `json:"filter_keywords"`
 	ScanIntervalSecond *int    `json:"scan_interval_seconds"`
 	Status             *string `json:"status"`
 	Enabled            *bool   `json:"enabled"`
@@ -73,6 +75,7 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 		RemotePath:         req.RemotePath,
 		SyncType:           req.SyncType,
 		MaxDepth:           req.MaxDepth,
+		FilterKeywords:     req.FilterKeywords,
 		ScanIntervalSecond: req.ScanIntervalSecond,
 	}
 	f, err := h.svc.Create(c.Request.Context(), in)
@@ -168,6 +171,7 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 		RemotePath:         req.RemotePath,
 		SyncType:           req.SyncType,
 		MaxDepth:           req.MaxDepth,
+		FilterKeywords:     req.FilterKeywords,
 		ScanIntervalSecond: req.ScanIntervalSecond,
 		Status:             req.Status,
 		Enabled:            req.Enabled,

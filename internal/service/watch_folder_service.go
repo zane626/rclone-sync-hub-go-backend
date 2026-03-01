@@ -34,6 +34,7 @@ type CreateWatchFolderInput struct {
 	RemotePath         string
 	SyncType           string
 	MaxDepth           int
+	FilterKeywords     string // 多行关键字，换行分隔，校验时去除每行首尾空格
 	ScanIntervalSecond int
 }
 
@@ -45,6 +46,7 @@ type UpdateWatchFolderInput struct {
 	RemotePath         *string
 	SyncType           *string
 	MaxDepth           *int
+	FilterKeywords     *string
 	ScanIntervalSecond *int
 	Status             *string
 	Enabled            *bool
@@ -61,16 +63,17 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 		interval = 300
 	}
 	f := &model.WatchFolder{
-		Name:                in.Name,
-		LocalPath:           in.LocalPath,
-		RemoteName:          in.RemoteName,
-		RemotePath:          in.RemotePath,
-		SyncType:            syncType,
-		MaxDepth:            in.MaxDepth,
+		Name:               in.Name,
+		LocalPath:          in.LocalPath,
+		RemoteName:         in.RemoteName,
+		RemotePath:         in.RemotePath,
+		SyncType:           syncType,
+		MaxDepth:           in.MaxDepth,
+		FilterKeywords:     in.FilterKeywords,
 		ScanIntervalSeconds: interval,
-		Status:              model.WatchFolderStatusWatching,
-		Enabled:             true,
-		LastActiveAt:        &now,
+		Status:             model.WatchFolderStatusWatching,
+		Enabled:            true,
+		LastActiveAt:       &now,
 	}
 	if err := s.repo.Create(f); err != nil {
 		return nil, err
@@ -100,6 +103,9 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	}
 	if in.MaxDepth != nil {
 		f.MaxDepth = *in.MaxDepth
+	}
+	if in.FilterKeywords != nil {
+		f.FilterKeywords = *in.FilterKeywords
 	}
 	if in.ScanIntervalSecond != nil && *in.ScanIntervalSecond > 0 {
 		f.ScanIntervalSeconds = *in.ScanIntervalSecond

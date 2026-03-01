@@ -78,6 +78,15 @@
           <n-form-item label="最大深度" path="max_depth">
             <n-input-number v-model:value="form.max_depth" :min="0" />
           </n-form-item>
+          <n-form-item label="过滤关键字" path="filter_keywords">
+            <n-input
+              v-model:value="form.filter_keywords"
+              type="textarea"
+              placeholder="每行一个关键字，路径或文件名包含任一关键字将被排除（可含空格，保存时自动去除首尾空格）"
+              :rows="4"
+              style="font-family: inherit"
+            />
+          </n-form-item>
           <n-form-item label="扫描间隔(s)" path="scan_interval_seconds">
             <n-input-number v-model:value="form.scan_interval_seconds" :min="60" />
           </n-form-item>
@@ -285,6 +294,7 @@ const form = ref({
   remote_name: '',
   remote_path: '',
   max_depth: 5,
+  filter_keywords: '',
   scan_interval_seconds: 300,
   sync_type: 'local_to_remote'
 });
@@ -448,6 +458,7 @@ function openCreate() {
     remote_name: '',
     remote_path: '',
     max_depth: 5,
+    filter_keywords: '',
     scan_interval_seconds: 300,
     sync_type: 'local_to_remote'
   });
@@ -463,10 +474,21 @@ function openEdit(row) {
     remote_name: row.remoteName,
     remote_path: row.remotePath,
     max_depth: row.maxDepth || 5,
+    filter_keywords: (row.FilterKeywords ?? row.filterKeywords ?? ''),
     scan_interval_seconds: row.scanIntervalSeconds || 300,
     sync_type: row.syncType || 'local_to_remote'
   });
   drawerVisible.value = true;
+}
+
+// 将多行过滤关键字按换行分割并去除每行首尾空格，空行忽略，再拼回为字符串
+function normalizeFilterKeywords(text) {
+  if (text == null || text === '') return '';
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 function handleSubmit() {
@@ -478,6 +500,7 @@ function handleSubmit() {
         remote_name: form.value.remote_name,
         remote_path: form.value.remote_path,
         max_depth: form.value.max_depth || 5,
+        filter_keywords: normalizeFilterKeywords(form.value.filter_keywords),
         scan_interval_seconds: form.value.scan_interval_seconds || 300,
         sync_type: form.value.sync_type
       };
