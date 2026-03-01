@@ -3,6 +3,9 @@ package worker
 
 import (
 	"context"
+	"path"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,12 +169,27 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 		)
 	}
 
+	// 传给 rclone 的远程路径只取目录部分，去掉当前文件名，否则 rclone 会创建同名文件夹再上传到该文件夹内
+	remotePathForCopy := remotePath
+	if fileName := filepath.Base(localPath); fileName != "" {
+		rp := strings.TrimSuffix(remotePath, "/")
+		if rp == fileName || strings.HasSuffix(rp, "/"+fileName) {
+			dir := path.Dir(rp)
+			if dir == "." {
+				remotePathForCopy = ""
+			} else {
+				remotePathForCopy = dir
+			}
+		}
+	}
+
 	logger.L.Info("worker: start upload",
 		zap.Uint("taskID", taskID),
 		zap.Int("workerID", workerID),
 		zap.String("local_path", localPath),
 		zap.String("remote_name", remoteName),
 		zap.String("remote_path", remotePath),
+		zap.String("remote_path_for_copy", remotePathForCopy),
 	)
 
 	// 通过 rclone 接口执行，支持重试
@@ -200,7 +218,7 @@ func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
 		const progressThrottle = time.Second
 		var lastProgressAt time.Time
 
-		res, err = q.rclone.Copy(ctx, localPath, remoteName, remotePath, func(p rclone.Progress) {
+		res, err = q.rclone.Copy(ctx, localPath, remoteName, remotePathForCopy, func(p rclone.Progress) {
 			now := time.Now()
 			// 每条输出都写入 upload_logs，不写 task 表
 			_ = q.logRepo.Create(&model.UploadLog{
