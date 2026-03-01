@@ -16,8 +16,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |            
-            ${{ secrets.DOCKER_USERNAME }}/rclone-sync-hub-backend
+          images: |
+            ${{ secrets.DOCKER_USERNAME }}/rclone-sync-hub-go-backend
           tags: |
             type=semver,pattern={{version}},prefix=
             type=raw,value=latest
