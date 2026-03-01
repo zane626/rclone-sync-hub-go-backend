@@ -1,0 +1,32 @@
+# Fresh 热重载配置（兼容 Go 1.22）
+# 使用：在项目根目录执行 fresh 或 make dev
+# 安装：go install github.com/zzwx/fresh@latest
+
+version: 1
+root: .
+main_path: rclone-sync-hub/cmd/server
+tmp_path: ./tmp
+build_name: main
+build_args:
+run_args:
+build_log: build-errors.log
+valid_ext: .go, .tpl, .tmpl, .html, .yaml, .yml
+no_rebuild_ext: .tpl, .tmpl, .html
+# ignore 必须是字符串（可以多行），不能是 YAML 数组
+ignore:
+  tmp,
+  vendor,
+  frontend,
+  node_modules,
+  .git,
+  cmd/server/frontend,
+  bin,
+  "**/*_test.go",
+build_delay: 500ms
+colors: true
+log_color_main: cyan
+log_color_build: yellow
+log_color_runner: green
+log_color_watcher: magenta
+log_color_app:
+debug: true

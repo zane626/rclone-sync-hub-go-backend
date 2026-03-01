@@ -1,0 +1,41 @@
+# 本地或生产部署示例：MySQL + 本服务
+# 使用前请先配置 configs/config.yaml 中的 database 与 scan.local_path / remote
+
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_PATH: /app/configs/config.docker.yaml
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data/local:/data/local:ro   # 扫描的本地目录，按需修改
+      - rclone-config:/root/.config/rclone:ro  # rclone 配置（需先在本机 rclone config 后挂载）
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: rclone_sync_hub
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppassword
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mysql_data:
+  rclone-config:

@@ -1,0 +1,24 @@
+# Fresh 热重载
+tmp/
+build-errors.log
+
+# 构建产物
+bin/
+*.exe
+
+# 依赖与环境
+vendor/
+.env
+.env.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+*/node_modules
+*/dist

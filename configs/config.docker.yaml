@@ -1,0 +1,35 @@
+# Docker Compose 使用的配置：database.host 指向服务名 mysql
+server:
+  port: 8080
+  mode: release
+  embed_frontend: true
+  enable_swagger: true   # 开发/调试时可访问 /swagger/index.html
+
+database:
+  host: mysql
+  port: 3306
+  user: app
+  password: apppassword
+  dbname: rclone_sync_hub
+  charset: utf8mb4
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_idle_time_mins: 10
+
+scan:
+  local_path: /data/local
+  cron_schedule: "*/5 * * * *"
+  enabled: false
+  interval_seconds: 300
+
+worker:
+  max_concurrent: 3
+  max_retry: 3
+  queue_size: 1000
+
+rclone:
+  bin_path: rclone
+
+log:
+  level: info
+  format: json
