@@ -2,7 +2,8 @@ name: rclone-sync-hub
 
 services:
   app:
-    build: .
+    image: zane626/rclone-sync-hub-go-backend
+    container_name: rclone-sync-hub-go-backend_container
     ports:
       - "8080:8080"
     environment:
@@ -31,7 +32,7 @@ services:
       # 可选：RCLONE_BIN_PATH 默认 rclone
     volumes:
       - ./data/local:/volumes:ro
-      - C:\Users\Administrator\AppData\Roaming\rclone:/root/.config/rclone:ro
+      - ./rclone:/root/.config/rclone:ro
     depends_on:
       mysql:
         condition: service_healthy
