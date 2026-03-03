@@ -188,6 +188,7 @@
 
 <script setup>
 import { ref, onMounted, h } from 'vue';
+import dayjs from 'dayjs';
 import { NSelect, NSpin, NDataTable, NTag, NSpace } from 'naive-ui';
 import { getDashboard } from '../api/analytics';
 
@@ -238,7 +239,16 @@ function barWidth(item) {
 }
 
 const byTimeColumns = [
-  { title: '日期', key: 'date', width: 110 },
+  {
+    title: '日期',
+    key: 'date',
+    width: 110,
+    render: (row) => {
+    if (row.date == null || row.date === '') return '-';
+    const d = dayjs(row.date);
+    return d.isValid() ? d.format('YYYY-MM-DD') : String(row.date);
+  }
+  },
   { title: '完成数', key: 'completed_count', width: 90 },
   { title: '失败数', key: 'failed_count', width: 90 },
   {

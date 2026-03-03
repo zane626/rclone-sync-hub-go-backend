@@ -11,6 +11,9 @@ importers:
       axios:
         specifier: ^1.7.0
         version: 1.13.5
+      dayjs:
+        specifier: ^1.11.13
+        version: 1.11.19
       naive-ui:
         specifier: ^2.38.0
         version: 2.43.2(vue@3.5.29)
@@ -413,6 +416,9 @@ packages:
 
   date-fns@4.1.0:
     resolution: {integrity: sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg==}
+
+  dayjs@1.11.19:
+    resolution: {integrity: sha512-t5EcLVS6QPBNqM2z8fakk/NKel+Xzshgt8FFKAn+qwlD1pzZWxh0nVCrvFK7ZDb6XucZeF9z8C7CBWTRIVApAw==}
 
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
@@ -896,6 +902,8 @@ snapshots:
       date-fns: 4.1.0
 
   date-fns@4.1.0: {}
+
+  dayjs@1.11.19: {}
 
   delayed-stream@1.0.0: {}
 

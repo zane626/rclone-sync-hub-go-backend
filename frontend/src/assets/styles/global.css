@@ -53,7 +53,9 @@ body {
 /* 内容区通用页面容器：铺满剩余视口，超出时由外层滚动 */
 .app-page {
   padding: var(--space-page);
-  min-height: calc(100vh - 56px);
+  max-width: 1800px;
+  min-height: calc(100vh - 56px - 39px);
+  margin: 0 auto;
   box-sizing: border-box;
 }
 

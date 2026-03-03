@@ -1,5 +1,5 @@
 <template>
-  <n-config-provider :theme-overrides="themeOverrides">
+  <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-loading-bar-provider>
       <n-message-provider>
         <n-dialog-provider>
@@ -57,7 +57,9 @@ import {
   NLayoutContent,
   NLayoutFooter,
   NMenu,
-  NButton
+  NButton,
+  zhCN,
+  dateZhCN
 } from 'naive-ui';
 import pkg from '../package.json';
 

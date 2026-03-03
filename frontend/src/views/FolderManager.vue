@@ -31,6 +31,7 @@
 
     <div class="app-table-wrap">
       <n-data-table
+        remote
         :columns="columns"
         :data="tableData"
         :bordered="false"
@@ -170,11 +171,17 @@ const filter = ref({
 
 const pagination = ref({
   page: 1,
-  pageSize: 10,
+  pageSize: 20,
   itemCount: 0,
-  showSizePicker: false,
+  showSizePicker: true,
+  pageSizes: [20, 50, 100, 200, 500, 1000, 10000],
+  prefix: (info) => `共 ${info.itemCount} 条`,
   onChange: (page) => {
     pagination.value.page = page;
+    loadData();
+  },
+  onPageSizeChange: (pageSize) => {
+    pagination.value.pageSize = pageSize;
     loadData();
   }
 });
@@ -389,6 +396,9 @@ async function loadData() {
       page: pagination.value.page,
       page_size: pagination.value.pageSize
     });
+    const total = Number(res.total) ?? 0;
+    pagination.value.itemCount = total;
+
     tableData.value = (res.items || []).map((item) => ({
       ...item,
       id: item.ID,
@@ -398,12 +408,17 @@ async function loadData() {
       remotePath: item.RemotePath,
       status: item.Status
     }));
-    if (typeof res.total === 'number') {
-      pagination.value.itemCount = res.total;
+
+    const maxPage = Math.max(1, Math.ceil(total / pagination.value.pageSize));
+    if (pagination.value.page > maxPage) {
+      pagination.value.page = 1;
+      await loadData();
     }
+    pagination.value.itemCount = Number(total) ?? 0;
   } catch (e) {
     message.error('加载监听文件夹失败');
     tableData.value = [];
+    pagination.value.itemCount = 0;
   }
 }
 

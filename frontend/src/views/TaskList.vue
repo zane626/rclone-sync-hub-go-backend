@@ -29,17 +29,23 @@
       </div>
     </div>
 
-    <div class="app-table-wrap">
-      <n-data-table
-        :columns="columns"
-        :data="tableData"
-        :bordered="false"
-        :pagination="pagination"
-        :row-key="rowKey"
-        :scroll-x="1400"
-        v-model:checked-row-keys="checkedRowKeys"
-        striped
-      />
+    <div class="app-table-wrap list-table-scroll">
+      <n-spin :show="loading">
+        <n-data-table
+          remote
+          :single-line="false"
+          :columns="columns"
+          :data="tableData"
+          :bordered="false"
+          :pagination="pagination"
+          :row-key="rowKey"
+          :scroll-x="1400"
+          v-model:checked-row-keys="checkedRowKeys"
+          striped
+          max-height="calc(100vh - 56px - 52px - 220px)"
+          class="list-data-table"
+        />
+      </n-spin>
     </div>
 
     <n-drawer v-model:show="logDrawerVisible" :width="1000" placement="right" class="log-drawer">
@@ -106,13 +112,20 @@ const filter = ref({
   keyword: ''
 });
 
+const loading = ref(false);
 const pagination = ref({
   page: 1,
   pageSize: 20,
   itemCount: 0,
-  showSizePicker: false,
+  showSizePicker: true,
+  pageSizes: [20, 50, 100, 200, 500, 1000, 10000],
+  prefix: (info) => `共 ${info.itemCount} 条`,
   onChange: (page) => {
     pagination.value.page = page;
+    loadData();
+  },
+  onPageSizeChange: (pageSize) => {
+    pagination.value.pageSize = pageSize;
     loadData();
   }
 });
@@ -167,14 +180,24 @@ function formatLogMessage(item) {
   return JSON.stringify(item);
 }
 
+function formatBytes(bytes) {
+  if (bytes == null || bytes === 0) return '0 B';
+  const g = 1024 * 1024 * 1024;
+  const m = 1024 * 1024;
+  const k = 1024;
+  if (bytes >= g) return (bytes / g).toFixed(2) + ' GB';
+  if (bytes >= m) return (bytes / m).toFixed(2) + ' MB';
+  if (bytes >= k) return (bytes / k).toFixed(2) + ' KB';
+  return bytes + ' B';
+}
 const columns = [
   { type: 'selection' },
   { title: '任务 ID', key: 'id', width: 80 },
   { title: '监听文件夹', key: 'watchFolderName', width: 140 },
-  { title: '文件名', key: 'fileName', width: 200 },
-  { title: '本地路径', key: 'localPath' },
+  { title: '文件名', key: 'fileName', width: 200},
+  { title: '本地路径', key: 'localPath', width: 200, ellipsis: { tooltip: true } },
   { title: 'remote', key: 'remoteName', width: 100 },
-  { title: '远端路径', key: 'remotePath' },
+  { title: '远端路径', key: 'remotePath', width: 200,  ellipsis: { tooltip: true } },
   {
     title: '状态 / 进度',
     key: 'status',
@@ -217,6 +240,7 @@ const columns = [
       );
     }
   },
+  { title: '文件大小', key: 'fileSize', width: 100, render: (row) => formatBytes(row.FileRecord.FileSize) },
   {
     title: '日志',
     key: 'logs',
@@ -286,6 +310,7 @@ const columns = [
 ];
 
 async function loadData() {
+  loading.value = true;
   checkedRowKeys.value = [];
   try {
     const res = await fetchTasks({
@@ -294,8 +319,12 @@ async function loadData() {
       page: pagination.value.page,
       page_size: pagination.value.pageSize
     });
+    const total = Number(res.total) ?? 0;
+    pagination.value.itemCount = total;
+
     const items = res.items || res.data || [];
     tableData.value = items.map((t) => ({
+      ...t,
       id: t.ID,
       watchFolderName: t.WatchFolderName,
       fileName: t.FileName,
@@ -309,13 +338,19 @@ async function loadData() {
       errorMsg: t.ErrorMsg,
       fileSize: t.FileSize
     }));
-    if (typeof res.total === 'number') {
-      pagination.value.itemCount = res.total;
+
+    const maxPage = Math.max(1, Math.ceil(total / pagination.value.pageSize));
+    if (pagination.value.page > maxPage) {
+      pagination.value.page = 1;
+      await loadData();
     }
+    pagination.value.itemCount = Number(res.total) ?? 0;
   } catch (e) {
     message.error('加载任务列表失败');
     tableData.value = [];
+    pagination.value.itemCount = 0;
   }
+  loading.value = false;
 }
 
 function handleSearch() {
@@ -476,10 +511,30 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 整页不滚动，仅表格内部滚动 */
 .list-page {
   display: flex;
   flex-direction: column;
   gap: var(--space-page);
+  height: calc(100vh - 56px - 52px - 2 * var(--space-page));
+  min-height: 0;
+  overflow: hidden;
+}
+
+.list-table-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.list-table-scroll :deep(.n-spin),
+.list-table-scroll :deep(.n-spin-container) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .list-toolbar {
