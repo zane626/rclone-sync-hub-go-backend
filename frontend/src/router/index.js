@@ -18,19 +18,19 @@ const routes = [
     path: '/dashboard',
     name: 'Dashboard',
     component: Dashboard,
-    meta: { title: '工作台' }
+    meta: { title: '运行总览' }
   },
   {
     path: '/folders',
     name: 'FolderManager',
     component: FolderManager,
-    meta: { title: '文件夹管理' }
+    meta: { title: '监控目录' }
   },
   {
     path: '/tasks',
     name: 'TaskList',
     component: TaskList,
-    meta: { title: '任务列表' }
+    meta: { title: '任务中心' }
   },
   {
     path: '/:pathMatch(.*)*',

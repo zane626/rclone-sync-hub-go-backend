@@ -34,7 +34,7 @@
 
 - Go 1.25 语言基线，生产构建工具链 Go 1.26.7
 - Gin、GORM、MySQL 8.4、zap、Prometheus client
-- Vue 3、Vue Router、Naive UI、Vite 8、pnpm
+- Vue 3、Vue Router、原生 CSS 设计系统、Vite 8、pnpm（不依赖 UI 组件框架）
 - rclone 1.75.0
 - Docker/Compose、GitHub Actions
 

@@ -36,9 +36,19 @@ func openIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
+func newFileRecordFixture(localPath, relativePath, remotePath string) model.FileRecord {
+	return model.FileRecord{
+		LocalPath:    localPath,
+		RelativePath: relativePath,
+		RemotePath:   remotePath,
+		FileModTime:  time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC),
+	}
+}
+
 func TestFinishSuccessCommitsTaskAndFileVersionAtomically(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/a.bin", RelativePath: "a.bin", RemotePath: "backup/a.bin", Fingerprint: "fingerprint-a"}
+	file := newFileRecordFixture("/data/a.bin", "a.bin", "backup/a.bin")
+	file.Fingerprint = "fingerprint-a"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +77,8 @@ func TestFinishSuccessCommitsTaskAndFileVersionAtomically(t *testing.T) {
 
 func TestFinishSuccessDoesNotMarkSupersededFileVersion(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/b.bin", RelativePath: "b.bin", RemotePath: "backup/b.bin", Fingerprint: "new-version"}
+	file := newFileRecordFixture("/data/b.bin", "b.bin", "backup/b.bin")
+	file.Fingerprint = "new-version"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +102,9 @@ func TestFinishSuccessDoesNotMarkSupersededFileVersion(t *testing.T) {
 
 func TestFinishSuccessDoesNotMarkChangedRemoteTarget(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/target.bin", RelativePath: "target.bin", RemoteName: "new-remote", RemotePath: "new/target.bin", Fingerprint: "same-version"}
+	file := newFileRecordFixture("/data/target.bin", "target.bin", "new/target.bin")
+	file.RemoteName = "new-remote"
+	file.Fingerprint = "same-version"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +128,9 @@ func TestFinishSuccessDoesNotMarkChangedRemoteTarget(t *testing.T) {
 
 func TestFinishSuccessCannotOverwriteCancellationRequest(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/cancel.bin", RelativePath: "cancel.bin", RemoteName: "backup", RemotePath: "cancel.bin", Fingerprint: "cancel-version"}
+	file := newFileRecordFixture("/data/cancel.bin", "cancel.bin", "cancel.bin")
+	file.RemoteName = "backup"
+	file.Fingerprint = "cancel-version"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +167,7 @@ func TestFinishSuccessCannotOverwriteCancellationRequest(t *testing.T) {
 
 func TestReleaseLeaseFinalizesConcurrentCancellation(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/release.bin", RelativePath: "release.bin", RemotePath: "release.bin"}
+	file := newFileRecordFixture("/data/release.bin", "release.bin", "release.bin")
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +195,7 @@ func TestReleaseLeaseFinalizesConcurrentCancellation(t *testing.T) {
 
 func TestDeleteCannotRemoveRunningTask(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/running-delete.bin", RelativePath: "running-delete.bin", RemotePath: "running-delete.bin"}
+	file := newFileRecordFixture("/data/running-delete.bin", "running-delete.bin", "running-delete.bin")
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +214,8 @@ func TestDeleteCannotRemoveRunningTask(t *testing.T) {
 
 func TestBatchTaskCreationIsIdempotent(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{LocalPath: "/data/c.bin", RelativePath: "c.bin", RemotePath: "backup/c.bin", Fingerprint: "fingerprint-c"}
+	file := newFileRecordFixture("/data/c.bin", "c.bin", "backup/c.bin")
+	file.Fingerprint = "fingerprint-c"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +237,12 @@ func TestBatchTaskCreationIsIdempotent(t *testing.T) {
 func TestBatchSnapshotUpdateClearsOnlySupersededUploads(t *testing.T) {
 	db := openIntegrationDatabase(t)
 	uploadedAt := time.Now().Add(-time.Minute)
-	first := model.FileRecord{LocalPath: "/data/changed.bin", RelativePath: "changed.bin", RemotePath: "backup/changed.bin", Fingerprint: "old", UploadedAt: &uploadedAt}
-	second := model.FileRecord{LocalPath: "/data/same.bin", RelativePath: "same.bin", RemotePath: "backup/same.bin", Fingerprint: "same", UploadedAt: &uploadedAt}
+	first := newFileRecordFixture("/data/changed.bin", "changed.bin", "backup/changed.bin")
+	first.Fingerprint = "old"
+	first.UploadedAt = &uploadedAt
+	second := newFileRecordFixture("/data/same.bin", "same.bin", "backup/same.bin")
+	second.Fingerprint = "same"
+	second.UploadedAt = &uploadedAt
 	if err := db.Create(&[]*model.FileRecord{&first, &second}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +270,10 @@ func TestDeleteWatchFolderCancelsWorkAndDetachesSnapshots(t *testing.T) {
 	if err := db.Create(&folder).Error; err != nil {
 		t.Fatal(err)
 	}
-	file := model.FileRecord{WatchFolderID: folder.ID, LocalPath: "/data/delete/file.bin", RelativePath: "file.bin", RemoteName: "backup", RemotePath: "delete/file.bin", Fingerprint: "version"}
+	file := newFileRecordFixture("/data/delete/file.bin", "file.bin", "delete/file.bin")
+	file.WatchFolderID = folder.ID
+	file.RemoteName = "backup"
+	file.Fingerprint = "version"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +304,9 @@ func TestDeleteWatchFolderCancelsWorkAndDetachesSnapshots(t *testing.T) {
 
 func TestOrphanReconciliationMigration(t *testing.T) {
 	db := openIntegrationDatabase(t)
-	file := model.FileRecord{WatchFolderID: 999999, LocalPath: "/data/orphan/file.bin", RelativePath: "file.bin", RemotePath: "orphan/file.bin", Fingerprint: "version"}
+	file := newFileRecordFixture("/data/orphan/file.bin", "file.bin", "orphan/file.bin")
+	file.WatchFolderID = 999999
+	file.Fingerprint = "version"
 	if err := db.Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
