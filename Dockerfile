@@ -3,6 +3,7 @@
 # Frontend dependencies and runtimes are pinned so the same source produces a
 # repeatable artifact. Build failures intentionally fail the image build.
 ARG NODE_VERSION=24.19.0
+ARG GO_VERSION=1.26.7
 FROM node:${NODE_VERSION}-alpine AS frontend-builder
 WORKDIR /src/frontend
 
@@ -13,7 +14,6 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY frontend/ ./
 RUN pnpm build
 
-ARG GO_VERSION=1.26.7
 FROM golang:${GO_VERSION}-alpine AS go-builder
 WORKDIR /src
 
