@@ -14,6 +14,10 @@ export function pauseTask(id) {
   return http.post(`/api/tasks/${id}/pause`).then((res) => res.data);
 }
 
+export function cancelTask(id) {
+  return http.post(`/api/tasks/${id}/cancel`).then((res) => res.data);
+}
+
 export function fetchTaskLogs(id, limit = 500) {
   return http
     .get(`/api/tasks/${id}/logs`, { params: { limit } })
@@ -30,5 +34,9 @@ export function batchPauseTasks(body) {
 
 export function batchRetryTasks(body) {
   return http.post('/api/tasks/batch/retry', body).then((res) => res.data);
+}
+
+export function batchCancelTasks(body) {
+  return http.post('/api/tasks/batch/cancel', body).then((res) => res.data);
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"rclone-sync-hub/internal/rclone"
+	"rclone-sync-hub/internal/security"
 )
 
 // RcloneService 负责与 rclone 配置相关的业务（不涉及 HTTP）。
@@ -14,14 +15,24 @@ type RcloneService interface {
 
 type rcloneService struct {
 	client rclone.Client
+	policy *security.ResourcePolicy
 }
 
 // NewRcloneService 创建 RcloneService。
-func NewRcloneService(client rclone.Client) RcloneService {
-	return &rcloneService{client: client}
+func NewRcloneService(client rclone.Client, policy *security.ResourcePolicy) RcloneService {
+	return &rcloneService{client: client, policy: policy}
 }
 
 func (s *rcloneService) ListConfigs(ctx context.Context) ([]rclone.Remote, error) {
-	return s.client.ListRemotes(ctx)
+	remotes, err := s.client.ListRemotes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]rclone.Remote, 0, len(remotes))
+	for _, remote := range remotes {
+		if s.policy.AllowsRemote(remote.Name) {
+			filtered = append(filtered, remote)
+		}
+	}
+	return filtered, nil
 }
-

@@ -39,6 +39,7 @@ type FSSubDirListResponse struct {
 // @Success      200   {object} FSSubDirListResponse
 // @Failure      400   {object} map[string]string
 // @Failure      500   {object} map[string]string
+// @Security     BearerAuth
 // @Router       /api/fs/subdirs [get]
 func (h *FSHandler) ListSubDirs(c *gin.Context) {
 	path := c.Query("path")
@@ -48,7 +49,7 @@ func (h *FSHandler) ListSubDirs(c *gin.Context) {
 	}
 	dirs, err := h.svc.ListSubDirs(c.Request.Context(), path)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	items := make([]FSSubDir, 0, len(dirs))

@@ -60,6 +60,13 @@
                   <span class="stat-card__value">{{ data.overview.task_paused }}</span>
                 </div>
               </div>
+              <div class="stat-card">
+                <div class="stat-card__accent stat-canceled" />
+                <div class="stat-card__body">
+                  <span class="stat-card__label">已取消</span>
+                  <span class="stat-card__value">{{ data.overview.task_canceled }}</span>
+                </div>
+              </div>
               <div class="stat-card stat-wide">
                 <div class="stat-card__accent stat-traffic" />
                 <div class="stat-card__body">
@@ -227,7 +234,7 @@ function formatDate(v) {
 }
 
 const statusType = (status) => {
-  const map = { pending: 'default', running: 'success', success: 'info', failed: 'error', paused: 'warning' };
+  const map = { pending: 'default', running: 'success', success: 'info', failed: 'error', paused: 'warning', canceled: 'primary' };
   return map[status] || 'default';
 };
 
@@ -439,6 +446,7 @@ onMounted(() => {
 .stat-traffic { background: var(--stat-traffic); }
 .stat-failed { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
 .stat-paused { background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%); }
+.stat-canceled { background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%); }
 
 .dashboard-grid {
   display: grid;
@@ -487,6 +495,7 @@ onMounted(() => {
 .bar-success { background: var(--stat-success); }
 .bar-failed { background: linear-gradient(90deg, #ef4444, #dc2626); }
 .bar-paused { background: #94a3b8; }
+.bar-canceled { background: #8b5cf6; }
 
 .bar-value {
   font-size: 13px;

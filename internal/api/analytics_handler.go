@@ -29,12 +29,20 @@ func NewAnalyticsHandler(svc service.AnalyticsService) *AnalyticsHandler {
 // @Param        days  query    int  false  "趋势图天数，默认 7"
 // @Success      200  {object}  service.DashboardData
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/analytics/dashboard [get]
 func (h *AnalyticsHandler) GetDashboard(c *gin.Context) {
 	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
+	if days <= 0 {
+		days = 7
+	}
+	if days > 365 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "days cannot exceed 365", "code": "validation_error"})
+		return
+	}
 	data, err := h.svc.GetDashboard(c.Request.Context(), days)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, data)

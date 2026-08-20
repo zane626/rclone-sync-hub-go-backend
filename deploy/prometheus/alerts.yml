@@ -1,0 +1,66 @@
+groups:
+  - name: rclone-sync-hub
+    rules:
+      - alert: RcloneSyncHubUnavailable
+        expr: up{job="rclone-sync-hub"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Rclone Sync Hub cannot be scraped
+
+      - alert: RcloneSyncHubNotReady
+        expr: rclone_sync_hub_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Rclone Sync Hub cannot reach MySQL
+
+      - alert: RcloneSyncHubScanFailures
+        expr: increase(rclone_sync_hub_scan_runs_total{status="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: One or more folder scans failed
+
+      - alert: RcloneSyncHubScanSchedulerOverdue
+        expr: rclone_sync_hub_watch_folders_overdue > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: One or more watch folders are overdue without an active scan lease
+
+      - alert: RcloneSyncHubWorkerFailures
+        expr: increase(rclone_sync_hub_worker_task_results_total{status="failed"}[15m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Upload tasks are exhausting their retries
+
+      - alert: RcloneSyncHubTaskQueueBacklog
+        expr: rclone_sync_hub_task_queue_pending > 0 and rclone_sync_hub_task_queue_oldest_pending_age_seconds > 900
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The oldest pending upload task has waited more than 15 minutes
+
+      - alert: RcloneSyncHubDatabasePoolSaturation
+        expr: rclone_sync_hub_db_in_use_connections / rclone_sync_hub_db_max_open_connections > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database connection pool is over 80% utilized
+
+      - alert: RcloneSyncHubDatabaseWaits
+        expr: increase(rclone_sync_hub_db_wait_count_total[10m]) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Requests are waiting for database connections

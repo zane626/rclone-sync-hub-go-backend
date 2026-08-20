@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"math"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -39,17 +41,20 @@ type Remote struct {
 
 // Client 封装 rclone 命令行调用。
 type Client interface {
-	// Copy 执行 rclone copy，通过 progress 回调实时上报进度，ctx 取消可终止命令。
+	// Copy 使用 copyto 将一个本地文件上传到精确的远端文件路径。
 	Copy(ctx context.Context, localPath, remoteName, remotePath string, onProgress func(Progress)) (Result, error)
 	// ListRemotes 返回 rclone config 中配置的 remote 列表，仅包含 name 与 type 等非敏感信息。
 	ListRemotes(ctx context.Context) ([]Remote, error)
-	// FileExists 使用 rclone lsf 判断远端文件是否存在。
-	FileExists(ctx context.Context, remoteName, remotePath string) (bool, error)
 }
 
 type client struct {
 	binPath string
 }
+
+var (
+	progressLine    = regexp.MustCompile(`^\s*(\d+)/(\d+),\s*([\d.]+)%`)
+	transferredLine = regexp.MustCompile(`Transferred:\s+([\d.]+\s*[A-Za-z]+)\s*/\s*([\d.]+\s*[A-Za-z]+),\s*([\d.]+)%,\s*([\d.]+\s*[A-Za-z]+/s),\s*ETA\s+([^\s]+)`)
+)
 
 // NewClient 创建 rclone 客户端，binPath 为可执行文件路径（如 "rclone"）。
 func NewClient(binPath string) Client {
@@ -59,21 +64,20 @@ func NewClient(binPath string) Client {
 	return &client{binPath: binPath}
 }
 
-// Copy 执行 rclone copy --progress，解析 stdout 并回调 onProgress。
+// Copy 执行 rclone copyto --progress，解析输出并回调 onProgress。
 func (c *client) Copy(ctx context.Context, localPath, remoteName, remotePath string, onProgress func(Progress)) (Result, error) {
-	// rclone copy <localPath> <remote>:<remotePath> --progress；每个 flag 单独传参以便正确解析
+	// copyto 的目标是精确文件路径，避免 copy 将文件名再解释为目录。
 	dest := fmt.Sprintf("%s:%s", remoteName, strings.TrimPrefix(remotePath, "/"))
-	cmd := exec.CommandContext(ctx, c.binPath, "copy", localPath, dest,
+	cmd := exec.CommandContext(ctx, c.binPath, "copyto", localPath, dest,
 		"--progress",
+		"--stats=1s",
 		"--use-server-modtime",
 		"--no-traverse",
 		"--timeout=4h",
 		"--contimeout=10m",
 		"--expect-continue-timeout=10m",
-		"--low-level-retries=10",
-		"--retries=5",
-		"--retries-sleep=30s",
-		"--max-depth", "-1", // 递归深度限制，-1 表示不限制
+		"--low-level-retries=3",
+		"--retries=1", // durable retries are managed by the MySQL task state machine
 		"-v",
 	)
 	stdout, err := cmd.StdoutPipe()
@@ -88,126 +92,161 @@ func (c *client) Copy(ctx context.Context, localPath, remoteName, remotePath str
 		return Result{Success: false, Error: err.Error()}, err
 	}
 
-	var errMsg strings.Builder
+	errMsg := cappedBuffer{max: 64 * 1024}
+	var errMu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	// 两种进度格式：
 	// 1) 数字格式：1234/5678, 22%, 1234, 12345/s, 0:00:30, ETA
 	// 2) Transferred: 1.234M / 10.5G, 1%, 2.5 MB/s, ETA 2m30s
-	progressLine := regexp.MustCompile(`^\s*(\d+)/(\d+),\s*(\d+)%`)
-	transferredLine := regexp.MustCompile(`Transferred:\s+([\d.]+\s*\w*)\s*/\s*([\d.]+\s*\w*),\s*(\d+)%,\s*([\d.]+\s*\w*/s),\s*ETA\s+([\dwdhms]+)`)
-
-	go func() {
+	emitProgress := func(raw string) bool {
+		progress, ok := parseProgressLine(raw)
+		if !ok {
+			return false
+		}
+		if onProgress != nil {
+			onProgress(progress)
+		}
+		return true
+	}
+	scanStream := func(reader io.Reader, captureError bool) {
 		defer wg.Done()
-		sc := bufio.NewScanner(stdout)
-		for sc.Scan() {
-			line := sc.Text()
-			if onProgress == nil {
-				continue
-			}
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if m := transferredLine.FindStringSubmatch(line); len(m) >= 6 {
-				pct, _ := strconv.ParseFloat(m[3], 64)
-				onProgress(Progress{
-					Percent:    pct,
-					Message:    line,
-					ETA:        m[5],
-					CurrentStr: strings.TrimSpace(m[1]),
-					TotalStr:   strings.TrimSpace(m[2]),
-					// Speed 为 human 格式如 "2.5 MB/s"，暂不解析为 bytes/s
-				})
-			} else if m := progressLine.FindStringSubmatch(line); len(m) >= 4 {
-				done, _ := strconv.ParseInt(m[1], 10, 64)
-				total, _ := strconv.ParseInt(m[2], 10, 64)
-				pct, _ := strconv.ParseFloat(m[3], 64)
-				onProgress(Progress{
-					Percent:   pct,
-					BytesDone: done,
-					BytesTotal: total,
-					Message:   line,
-				})
-			} else {
-				onProgress(Progress{Message: line})
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			isProgress := emitProgress(line)
+			if captureError && !isProgress {
+				errMu.Lock()
+				errMsg.Append(line + "\n")
+				errMu.Unlock()
 			}
 		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		sc := bufio.NewScanner(stderr)
-		for sc.Scan() {
-			errMsg.WriteString(sc.Text())
-			errMsg.WriteString("\n")
+		if scanErr := scanner.Err(); scanErr != nil {
+			errMu.Lock()
+			errMsg.Append("read rclone output: " + scanErr.Error() + "\n")
+			errMu.Unlock()
 		}
-	}()
+	}
+
+	go scanStream(stdout, false)
+	go scanStream(stderr, true)
 
 	wg.Wait()
 	waitErr := cmd.Wait()
 	if waitErr != nil {
-		return Result{Success: false, Error: strings.TrimSpace(errMsg.String())}, waitErr
+		message := strings.TrimSpace(errMsg.String())
+		if message == "" && ctx.Err() != nil {
+			message = ctx.Err().Error()
+		}
+		return Result{Success: false, Error: message}, fmt.Errorf("rclone copyto: %w", waitErr)
 	}
 	return Result{Success: true}, nil
 }
 
-// ListRemotes 调用 `rclone config show` 并解析 remote 名称与 type，过滤掉敏感字段。
+func parseProgressLine(raw string) (Progress, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" {
+		return Progress{}, false
+	}
+	if match := transferredLine.FindStringSubmatch(line); len(match) >= 6 {
+		percent, _ := strconv.ParseFloat(match[3], 64)
+		done, _ := parseHumanBytes(match[1])
+		total, _ := parseHumanBytes(match[2])
+		speed, _ := parseHumanBytes(strings.TrimSuffix(match[4], "/s"))
+		return Progress{
+			Percent:    percent,
+			BytesDone:  done,
+			BytesTotal: total,
+			Speed:      speed,
+			Message:    line,
+			ETA:        match[5],
+			CurrentStr: strings.TrimSpace(match[1]),
+			TotalStr:   strings.TrimSpace(match[2]),
+		}, true
+	}
+	if match := progressLine.FindStringSubmatch(line); len(match) >= 4 {
+		done, _ := strconv.ParseInt(match[1], 10, 64)
+		total, _ := strconv.ParseInt(match[2], 10, 64)
+		percent, _ := strconv.ParseFloat(match[3], 64)
+		return Progress{Percent: percent, BytesDone: done, BytesTotal: total, Message: line}, true
+	}
+	return Progress{}, false
+}
+
+func parseHumanBytes(value string) (int64, bool) {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) != 2 {
+		return 0, false
+	}
+	number, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil || number < 0 {
+		return 0, false
+	}
+	multipliers := map[string]float64{
+		"B":  1,
+		"KB": 1000, "MB": 1000 * 1000, "GB": 1000 * 1000 * 1000, "TB": 1000 * 1000 * 1000 * 1000,
+		"KIB": 1 << 10, "MIB": 1 << 20, "GIB": 1 << 30, "TIB": 1 << 40,
+	}
+	multiplier, ok := multipliers[strings.ToUpper(fields[1])]
+	if !ok || number > float64(math.MaxInt64)/multiplier {
+		return 0, false
+	}
+	return int64(number * multiplier), true
+}
+
+type cappedBuffer struct {
+	data []byte
+	max  int
+}
+
+func (b *cappedBuffer) Append(value string) {
+	if b.max <= 0 || value == "" {
+		return
+	}
+	incoming := []byte(value)
+	if len(incoming) >= b.max {
+		b.data = append(b.data[:0], incoming[len(incoming)-b.max:]...)
+		return
+	}
+	if overflow := len(b.data) + len(incoming) - b.max; overflow > 0 {
+		copy(b.data, b.data[overflow:])
+		b.data = b.data[:len(b.data)-overflow]
+	}
+	b.data = append(b.data, incoming...)
+}
+
+func (b *cappedBuffer) String() string {
+	return string(b.data)
+}
+
+// ListRemotes uses listremotes --long so credentials never enter this process's output buffer.
 func (c *client) ListRemotes(ctx context.Context) ([]Remote, error) {
-	// rclone config show
-	cmd := exec.CommandContext(ctx, c.binPath, "config", "show")
+	cmd := exec.CommandContext(ctx, c.binPath, "listremotes", "--long")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("rclone config show: %w", err)
+		return nil, fmt.Errorf("rclone listremotes: %w", err)
 	}
-	return parseConfigShow(string(out)), nil
+	return parseListRemotesLong(string(out)), nil
 }
 
-// FileExists 调用 `rclone lsf remote:path` 判断远程文件是否存在。
-// remotePath 为 remote 内部的路径（不包含 remoteName），例如 /backup/a.txt。
-func (c *client) FileExists(ctx context.Context, remoteName, remotePath string) (bool, error) {
-	dest := fmt.Sprintf("%s:%s", remoteName, strings.TrimPrefix(remotePath, "/"))
-	cmd := exec.CommandContext(ctx, c.binPath, "lsf", dest, "--files-only")
-	out, err := cmd.Output()
-	if err != nil {
-		// rclone 对于不存在的文件返回非 0，按“文件不存在”处理即可。
-		return false, nil
-	}
-	if strings.TrimSpace(string(out)) == "" {
-		return false, nil
-	}
-	return true, nil
-}
-
-// parseConfigShow 解析 rclone config show 的输出，只提取 [name] 与 type = xxx。
-func parseConfigShow(text string) []Remote {
+func parseListRemotesLong(text string) []Remote {
 	var remotes []Remote
-	var current *Remote
-
-	lines := strings.Split(text, "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+	for _, raw := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) == 0 {
 			continue
 		}
-		// [remoteName]
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			name := strings.TrimSpace(line[1 : len(line)-1])
-			if name == "" {
-				continue
-			}
-			remotes = append(remotes, Remote{Name: name})
-			current = &remotes[len(remotes)-1]
+		name := strings.TrimSuffix(fields[0], ":")
+		if name == "" {
 			continue
 		}
-		// type = s3
-		if current != nil && strings.HasPrefix(line, "type") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				current.Type = strings.TrimSpace(parts[1])
-			}
+		remote := Remote{Name: name}
+		if len(fields) > 1 {
+			remote.Type = fields[1]
 		}
+		remotes = append(remotes, remote)
 	}
 	return remotes
 }

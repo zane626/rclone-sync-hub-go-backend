@@ -3,28 +3,45 @@ server:
   port: 8080
   mode: release
   embed_frontend: true
-  enable_swagger: true   # 开发/调试时可访问 /swagger/index.html
+  enable_swagger: false
+  trusted_proxies: []
 
 database:
   host: mysql
   port: 3306
   user: app
-  password: apppassword
+  password: "" # 从 DB_PASSWORD 注入
   dbname: rclone_sync_hub
   charset: utf8mb4
   max_open_conns: 25
   max_idle_conns: 10
   conn_max_idle_time_mins: 10
+  conn_max_lifetime_mins: 30
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 30
+  write_timeout_seconds: 30
 
 scan:
-  local_path: /volumes
-  enabled: false
   interval_seconds: 300
+  watch_poll_interval_seconds: 30
+  folder_timeout_seconds: 1800
+  file_stable_seconds: 30
+  max_concurrent_folders: 2
+  batch_size: 500
+  lease_seconds: 90
+  heartbeat_seconds: 30
 
 worker:
   max_concurrent: 3
   max_retry: 3
-  queue_size: 1000
+  queue_size: 1000       # 已弃用，仅为兼容旧配置保留
+  poll_interval_milliseconds: 1000
+  lease_seconds: 90
+  heartbeat_seconds: 30
+  task_timeout_seconds: 14400
+  retry_base_seconds: 30
+  retry_max_seconds: 1800
+  progress_persist_seconds: 2
 
 rclone:
   bin_path: rclone
@@ -32,3 +49,22 @@ rclone:
 log:
   level: info
   format: json
+
+# Docker 生产运行仍应通过环境变量注入密码与签名密钥。
+security:
+  enabled: true
+  admin_username: admin
+  admin_password: ""
+  token_secret: ""
+  allowed_local_roots: [/volumes]
+  allowed_remotes: []
+  max_request_body_bytes: 1048576
+  login_attempts_per_minute: 10
+
+maintenance:
+  interval_hours: 24
+  upload_log_retention_days: 30
+  task_retention_days: 365
+  scan_run_retention_days: 90
+  audit_log_retention_days: 180
+  delete_batch_size: 5000

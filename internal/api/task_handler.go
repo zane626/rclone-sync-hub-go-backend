@@ -17,6 +17,9 @@ type TaskHandler struct {
 	svc service.UploadService
 }
 
+// Keep model types reachable for Swagger annotations in this file.
+var _ = model.UploadTask{}
+
 // NewTaskHandler 创建 TaskHandler。
 func NewTaskHandler(svc service.UploadService) *TaskHandler {
 	return &TaskHandler{svc: svc}
@@ -28,21 +31,39 @@ func NewTaskHandler(svc service.UploadService) *TaskHandler {
 // @Tags         tasks
 // @Accept       json
 // @Produce      json
-// @Param        status    query    string  false  "任务状态: pending|running|success|failed，空为全部"
+// @Param        status    query    string  false  "任务状态: pending|running|success|failed|paused|canceled，空为全部"
 // @Param        keyword   query    string  false  "关键词：对所属文件夹名/文件名/本地路径/网盘名/上传路径模糊查询"
 // @Param        page      query    int     false  "页码，从 1 开始"     default(1)
 // @Param        page_size query    int     false  "每页条数"            default(20)
 // @Success      200  {object}  map[string]interface{}  "items 为任务列表，total 为总条数"
 // @Failure      500  {object}  map[string]string       "error 为错误信息"
+// @Security     BearerAuth
 // @Router       /api/tasks [get]
 func (h *TaskHandler) ListTasks(c *gin.Context) {
 	status := c.DefaultQuery("status", "")
 	keyword := strings.TrimSpace(c.DefaultQuery("keyword", ""))
+	if len(keyword) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "keyword is too long", "code": "validation_error"})
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page <= 0 {
+		page = 1
+	}
+	if page > 10000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page is too large", "code": "validation_error"})
+		return
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
 	list, total, err := h.svc.ListTasks(c.Request.Context(), status, keyword, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -55,7 +76,15 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 	})
 }
 
-// GetTask  GET /api/tasks/:id
+// GetTask returns one upload task.
+// @Summary      获取上传任务
+// @Tags         tasks
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  model.UploadTask
+// @Failure      404  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /api/tasks/{id} [get]
 func (h *TaskHandler) GetTask(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -65,7 +94,7 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 	}
 	task, err := h.svc.GetTask(c.Request.Context(), uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, task)
@@ -81,7 +110,9 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 // @Param        limit  query   int   false  "最多返回条数，默认 500"
 // @Success      200  {array}  model.UploadLog
 // @Failure      400  {object}  map[string]string  "invalid id"
+// @Failure      404  {object}  map[string]string  "task not found"
 // @Failure      500  {object}  map[string]string  "error"
+// @Security     BearerAuth
 // @Router       /api/tasks/{id}/logs [get]
 func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	idStr := c.Param("id")
@@ -93,38 +124,54 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
 	logs, err := h.svc.GetTaskLogs(c.Request.Context(), uint(id), limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, logs)
 }
 
-// TriggerScan  POST /api/scan
+// TriggerScan schedules all enabled folders for an asynchronous scan.
+// @Summary      异步触发全部启用目录扫描
+// @Tags         scanner
+// @Produce      json
+// @Success      202  {object}  map[string]int64
+// @Security     BearerAuth
+// @Router       /api/scan [post]
 func (h *TaskHandler) TriggerScan(c *gin.Context) {
 	enqueued, err := h.svc.TriggerScan(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"enqueued": enqueued})
+	c.JSON(http.StatusAccepted, gin.H{"enqueued": enqueued})
 }
 
-// GetStats  GET /api/stats
+// GetStats returns task counts for every known status.
+// @Summary      获取任务状态统计
+// @Tags         tasks
+// @Produce      json
+// @Success      200  {object}  map[string]int64
+// @Security     BearerAuth
+// @Router       /api/stats [get]
 func (h *TaskHandler) GetStats(c *gin.Context) {
-	pending, running, success, failed, err := h.svc.GetStats(c.Request.Context())
+	stats, err := h.svc.GetStats(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		model.TaskStatusPending: pending,
-		model.TaskStatusRunning: running,
-		model.TaskStatusSuccess: success,
-		model.TaskStatusFailed:  failed,
-	})
+	c.JSON(http.StatusOK, stats)
 }
 
-// SubmitTask  POST /api/tasks/:id/retry  将任务重新入队
+// SubmitTask retries an eligible durable task.
+// @Summary      重试上传任务
+// @Tags         tasks
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  map[string]bool
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /api/tasks/{id}/retry [post]
 func (h *TaskHandler) SubmitTask(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -133,7 +180,7 @@ func (h *TaskHandler) SubmitTask(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SubmitTask(c.Request.Context(), uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -152,7 +199,7 @@ type TaskCreateReq struct {
 
 // TaskBatchReq 批量操作请求体。
 type TaskBatchReq struct {
-	IDs []uint `json:"ids" binding:"required"` // 任务 ID 列表
+	IDs []uint `json:"ids" binding:"required,min=1,max=1000,dive,gt=0"` // 任务 ID 列表
 }
 
 // CreateTask 创建上传任务。
@@ -165,11 +212,12 @@ type TaskBatchReq struct {
 // @Success      200   {object}  model.UploadTask
 // @Failure      400   {object}  map[string]string
 // @Failure      500   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks [post]
 func (h *TaskHandler) CreateTask(c *gin.Context) {
 	var req TaskCreateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	in := service.CreateTaskInput{
@@ -183,7 +231,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 	}
 	task, err := h.svc.CreateTask(c.Request.Context(), in)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, task)
@@ -198,6 +246,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 // @Success      200  {object}  map[string]bool
 // @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks/{id} [delete]
 func (h *TaskHandler) DeleteTask(c *gin.Context) {
 	idStr := c.Param("id")
@@ -207,7 +256,7 @@ func (h *TaskHandler) DeleteTask(c *gin.Context) {
 		return
 	}
 	if err := h.svc.DeleteTask(c.Request.Context(), uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -222,6 +271,7 @@ func (h *TaskHandler) DeleteTask(c *gin.Context) {
 // @Success      200  {object}  map[string]bool
 // @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks/{id}/pause [post]
 func (h *TaskHandler) PauseTask(c *gin.Context) {
 	idStr := c.Param("id")
@@ -231,7 +281,29 @@ func (h *TaskHandler) PauseTask(c *gin.Context) {
 		return
 	}
 	if err := h.svc.PauseTask(c.Request.Context(), uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// CancelTask 取消等待中或运行中的上传任务。
+// @Summary      取消上传任务
+// @Description  等待中的任务立即取消；运行中的任务在 worker 心跳后终止 rclone 进程
+// @Tags         tasks
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  map[string]bool
+// @Security     BearerAuth
+// @Router       /api/tasks/{id}/cancel [post]
+func (h *TaskHandler) CancelTask(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.svc.CancelTask(c.Request.Context(), uint(id)); err != nil {
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -246,11 +318,12 @@ func (h *TaskHandler) PauseTask(c *gin.Context) {
 // @Param        body  body      TaskBatchReq  true  "任务 ID 列表"
 // @Success      200   {object}  service.TaskBatchResult
 // @Failure      400   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks/batch/retry [post]
 func (h *TaskHandler) BatchRetry(c *gin.Context) {
 	var req TaskBatchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	res := h.svc.BatchSubmitTasks(c.Request.Context(), req.IDs)
@@ -266,11 +339,12 @@ func (h *TaskHandler) BatchRetry(c *gin.Context) {
 // @Param        body  body      TaskBatchReq  true  "任务 ID 列表"
 // @Success      200   {object}  service.TaskBatchResult
 // @Failure      400   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks/batch/pause [post]
 func (h *TaskHandler) BatchPause(c *gin.Context) {
 	var req TaskBatchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	res := h.svc.BatchPauseTasks(c.Request.Context(), req.IDs)
@@ -286,13 +360,32 @@ func (h *TaskHandler) BatchPause(c *gin.Context) {
 // @Param        body  body      TaskBatchReq  true  "任务 ID 列表"
 // @Success      200   {object}  service.TaskBatchResult
 // @Failure      400   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/tasks/batch/delete [post]
 func (h *TaskHandler) BatchDelete(c *gin.Context) {
 	var req TaskBatchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	res := h.svc.BatchDeleteTasks(c.Request.Context(), req.IDs)
 	c.JSON(http.StatusOK, res)
+}
+
+// BatchCancel 批量取消任务。
+// @Summary      批量取消上传任务
+// @Tags         tasks
+// @Accept       json
+// @Produce      json
+// @Param        body  body      TaskBatchReq  true  "任务 ID 列表"
+// @Success      200   {object}  service.TaskBatchResult
+// @Security     BearerAuth
+// @Router       /api/tasks/batch/cancel [post]
+func (h *TaskHandler) BatchCancel(c *gin.Context) {
+	var req TaskBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
+		return
+	}
+	c.JSON(http.StatusOK, h.svc.BatchCancelTasks(c.Request.Context(), req.IDs))
 }

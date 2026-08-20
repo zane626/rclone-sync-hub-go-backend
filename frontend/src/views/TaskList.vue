@@ -21,8 +21,9 @@
           <n-button size="small" type="primary" @click="handleSearch">查询</n-button>
           <n-button size="small" quaternary @click="handleReset">重置</n-button>
         </div>
-        <div class="app-toolbar-actions">
+        <div v-if="isAdmin" class="app-toolbar-actions">
           <n-button size="small" type="warning" secondary @click="handleBatchPause">批量暂停</n-button>
+          <n-button size="small" type="error" secondary @click="handleBatchCancel">批量取消</n-button>
           <n-button size="small" type="info" secondary @click="handleBatchRetry">批量重试</n-button>
           <n-button size="small" type="error" secondary @click="handleBatchDelete">批量删除</n-button>
         </div>
@@ -72,7 +73,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue';
+import { ref, computed, onMounted, onUnmounted, h } from 'vue';
 import {
   NButton,
   NDataTable,
@@ -90,21 +91,29 @@ import {
 import {
   fetchTasks,
   batchPauseTasks,
+  batchCancelTasks,
   batchRetryTasks,
   batchDeleteTasks,
   deleteTask,
   pauseTask,
+  cancelTask,
   fetchTaskLogs
 } from '../api/tasks';
+import { streamTaskEvents } from '../api/events';
+import { currentUser } from '../api/auth';
 
 const tableData = ref([]);
+// No stored user means authentication is disabled in local development.
+const isAdmin = currentUser()?.role !== 'viewer';
 
 const statusOptions = [
   { label: '全部', value: null },
   { label: '待处理', value: 'pending' },
   { label: '运行中', value: 'running' },
   { label: '成功', value: 'success' },
-  { label: '失败', value: 'failed' }
+  { label: '失败', value: 'failed' },
+  { label: '已暂停', value: 'paused' },
+  { label: '已取消', value: 'canceled' }
 ];
 
 const filter = ref({
@@ -118,7 +127,7 @@ const pagination = ref({
   pageSize: 20,
   itemCount: 0,
   showSizePicker: true,
-  pageSizes: [20, 50, 100, 200, 500, 1000, 10000],
+  pageSizes: [20, 50, 100, 200],
   prefix: (info) => `共 ${info.itemCount} 条`,
   onChange: (page) => {
     pagination.value.page = page;
@@ -126,6 +135,7 @@ const pagination = ref({
   },
   onPageSizeChange: (pageSize) => {
     pagination.value.pageSize = pageSize;
+    pagination.value.page = 1;
     loadData();
   }
 });
@@ -191,7 +201,7 @@ function formatBytes(bytes) {
   return bytes + ' B';
 }
 const columns = [
-  { type: 'selection' },
+  ...(isAdmin ? [{ type: 'selection' }] : []),
   { title: '任务 ID', key: 'id', width: 80 },
   { title: '监听文件夹', key: 'watchFolderName', width: 140 },
   { title: '文件名', key: 'fileName', width: 200},
@@ -207,7 +217,9 @@ const columns = [
         pending: { label: '待处理', type: 'default' },
         running: { label: '运行中', type: 'success' },
         success: { label: '成功', type: 'info' },
-        failed: { label: '失败', type: 'error' }
+        failed: { label: '失败', type: 'error' },
+        paused: { label: '已暂停', type: 'warning' },
+        canceled: { label: '已取消', type: 'default' }
       };
       const info = map[row.status] || { label: row.status, type: 'default' };
       return h(
@@ -240,7 +252,7 @@ const columns = [
       );
     }
   },
-  { title: '文件大小', key: 'fileSize', width: 100, render: (row) => formatBytes(row.FileRecord.FileSize) },
+  { title: '文件大小', key: 'fileSize', width: 100, render: (row) => formatBytes(row.fileSize || row.FileRecord?.FileSize || 0) },
   {
     title: '日志',
     key: 'logs',
@@ -264,6 +276,7 @@ const columns = [
     width: 200,
     fixed: 'right',
     render(row) {
+      if (!isAdmin) return h('span', { style: 'color: #94a3b8' }, '只读');
       return h(
         NSpace,
         { size: 'small' },
@@ -274,9 +287,20 @@ const columns = [
               {
                 size: 'small',
                 tertiary: true,
+                type: 'error',
+                disabled: !isAdmin || !['pending', 'running'].includes(row.status),
+                onClick: isAdmin && ['pending', 'running'].includes(row.status) ? () => handleSingleCancel(row) : undefined
+              },
+              { default: () => '取消' }
+            ),
+            h(
+              NButton,
+              {
+                size: 'small',
+                tertiary: true,
                 type: 'warning',
-                disabled: row.status !== 'pending',
-                onClick: row.status === 'pending' ? () => handleSinglePause(row) : undefined
+                disabled: !isAdmin || row.status !== 'pending',
+                onClick: isAdmin && row.status === 'pending' ? () => handleSinglePause(row) : undefined
               },
               { default: () => '暂停' }
             ),
@@ -286,8 +310,8 @@ const columns = [
                 size: 'small',
                 tertiary: true,
                 type: 'info',
-                disabled: row.status !== 'failed',
-                onClick: row.status === 'failed' ? () => handleSingleRetry(row) : undefined
+                disabled: !isAdmin || !['failed', 'paused', 'canceled'].includes(row.status),
+                onClick: isAdmin && ['failed', 'paused', 'canceled'].includes(row.status) ? () => handleSingleRetry(row) : undefined
               },
               { default: () => '重试' }
             ),
@@ -297,8 +321,8 @@ const columns = [
                 size: 'small',
                 tertiary: true,
                 type: 'error',
-                disabled: row.status === 'running',
-                onClick: row.status !== 'running' ? () => handleSingleDelete(row) : undefined
+                disabled: !isAdmin || row.status === 'running',
+                onClick: isAdmin && row.status !== 'running' ? () => handleSingleDelete(row) : undefined
               },
               { default: () => '删除' }
             )
@@ -309,9 +333,11 @@ const columns = [
   }
 ];
 
-async function loadData() {
-  loading.value = true;
-  checkedRowKeys.value = [];
+async function loadData({ silent = false } = {}) {
+  if (!silent) {
+    loading.value = true;
+    checkedRowKeys.value = [];
+  }
   try {
     const res = await fetchTasks({
       status: filter.value.status || undefined,
@@ -319,7 +345,8 @@ async function loadData() {
       page: pagination.value.page,
       page_size: pagination.value.pageSize
     });
-    const total = Number(res.total) ?? 0;
+    const parsedTotal = Number(res.total);
+    const total = Number.isFinite(parsedTotal) ? parsedTotal : 0;
     pagination.value.itemCount = total;
 
     const items = res.items || res.data || [];
@@ -342,15 +369,16 @@ async function loadData() {
     const maxPage = Math.max(1, Math.ceil(total / pagination.value.pageSize));
     if (pagination.value.page > maxPage) {
       pagination.value.page = 1;
-      await loadData();
+      return loadData({ silent });
     }
-    pagination.value.itemCount = Number(res.total) ?? 0;
   } catch (e) {
-    message.error('加载任务列表失败');
-    tableData.value = [];
-    pagination.value.itemCount = 0;
+    if (!silent) {
+      message.error('加载任务列表失败');
+      tableData.value = [];
+      pagination.value.itemCount = 0;
+    }
   }
-  loading.value = false;
+  if (!silent) loading.value = false;
 }
 
 function handleSearch() {
@@ -418,6 +446,38 @@ async function handleSinglePause(row) {
   }
 }
 
+async function handleSingleCancel(row) {
+  if (!['pending', 'running'].includes(row.status)) return;
+  try {
+    await cancelTask(row.id);
+    message.success('已提交取消请求');
+  } catch (e) {
+    message.error(e?.response?.data?.error || e?.message || '取消失败');
+  }
+}
+
+async function handleBatchCancel() {
+  const ids = getSelectedIds();
+  if (!ids.length) {
+    message.warning('请先勾选要取消的任务');
+    return;
+  }
+  try {
+    const res = await batchCancelTasks({ ids });
+    const failed = res?.failed || {};
+    const okCount = res?.ok_ids?.length ?? 0;
+    const failCount = Object.keys(failed).length;
+    if (failCount > 0) {
+      message.warning(`已取消 ${okCount} 个，${failCount} 个失败：${Object.values(failed).join('；')}`);
+    } else {
+      message.success(`已取消 ${okCount} 个任务`);
+    }
+    loadData();
+  } catch (e) {
+    message.error(e?.response?.data?.error || e?.message || '批量取消失败');
+  }
+}
+
 async function handleBatchRetry() {
   const ids = getSelectedIds();
   if (!ids.length) {
@@ -441,7 +501,7 @@ async function handleBatchRetry() {
 }
 
 async function handleSingleRetry(row) {
-  if (row.status !== 'failed') return;
+  if (!['failed', 'paused', 'canceled'].includes(row.status)) return;
   try {
     const res = await batchRetryTasks({ ids: [row.id] });
     const failed = res?.failed || {};
@@ -507,6 +567,42 @@ function handleBatchDelete() {
 
 onMounted(() => {
   loadData();
+  startEventStream();
+  refreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadData({ silent: true });
+  }, 30000);
+});
+
+const eventAbortController = new AbortController();
+let refreshTimer;
+
+function applyTaskEvent(event) {
+  const row = tableData.value.find((item) => item.id === event.task_id);
+  if (!row) return;
+  if (event.type === 'task_progress') {
+    row.progress = event.percent ?? row.progress;
+    row.speed = event.speed ?? row.speed;
+  }
+  if (event.type === 'task_status') {
+    row.status = event.status || row.status;
+    if (event.status === 'success') row.progress = 100;
+  }
+}
+
+async function startEventStream() {
+  while (!eventAbortController.signal.aborted) {
+    try {
+      await streamTaskEvents(applyTaskEvent, eventAbortController.signal);
+    } catch {
+      if (eventAbortController.signal.aborted) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+}
+
+onUnmounted(() => {
+  eventAbortController.abort();
+  if (refreshTimer) window.clearInterval(refreshTimer);
 });
 </script>
 
@@ -609,4 +705,3 @@ onMounted(() => {
   padding: 24px;
 }
 </style>
-

@@ -9,14 +9,9 @@ const docTemplate = `{
     "info": {
         "description": "{{escape .Description}}",
         "title": "{{.Title}}",
-        "termsOfService": "http://swagger.io/terms/",
         "contact": {
-            "name": "API Support",
-            "url": "https://github.com/your-org/rclone-sync-hub"
-        },
-        "license": {
-            "name": "Apache 2.0",
-            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+            "name": "Project repository",
+            "url": "https://github.com/zane626/rclone-sync-hub-go-backend"
         },
         "version": "{{.Version}}"
     },
@@ -25,6 +20,11 @@ const docTemplate = `{
     "paths": {
         "/api/analytics/dashboard": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "返回概览数字、按状态/按监听文件夹/按时间趋势的图表数据，以及最近任务与失败任务列表，供数据分析页一次拉取",
                 "consumes": [
                     "application/json"
@@ -48,7 +48,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.DashboardData"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.DashboardData"
                         }
                     },
                     "500": {
@@ -63,8 +63,213 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/audit-logs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "operations"
+                ],
+                "summary": "获取操作审计日志",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "每页条数",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/config": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "获取认证配置",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "boolean"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/login": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "登录",
+                "parameters": [
+                    {
+                        "description": "用户名和密码",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.LoginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "获取当前用户",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "events"
+                ],
+                "summary": "订阅任务实时事件",
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/fs/subdirs": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）",
                 "produces": [
                     "application/json"
@@ -86,7 +291,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.FSSubDirListResponse"
+                            "$ref": "#/definitions/internal_api.FSSubDirListResponse"
                         }
                     },
                     "400": {
@@ -110,9 +315,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/health": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "兼容健康检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/health/live": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "存活检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/health/ready": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "就绪检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/rclone/configs": {
             "get": {
-                "description": "调用 ` + "`" + `rclone config show` + "`" + ` 并解析出 remote 名称与类型，过滤掉敏感字段",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "调用 ` + "`" + `rclone listremotes --long` + "`" + ` 获取 remote 名称与类型，不读取配置密钥",
                 "produces": [
                     "application/json"
                 ],
@@ -140,9 +428,117 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/scan": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanner"
+                ],
+                "summary": "异步触发全部启用目录扫描",
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer",
+                                "format": "int64"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/scan-runs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "operations"
+                ],
+                "summary": "获取扫描历史",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "监听目录 ID；0 为全部",
+                        "name": "watch_folder_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "每页条数",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/stats": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "获取任务状态统计",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer",
+                                "format": "int64"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/tasks": {
             "get": {
-                "description": "按状态筛选并分页返回上传任务，不传 status 时返回全部",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按状态筛选并分页返回上传任务，不传 status 时返回全部；keyword 对 watch_folder_name/file_name/local_path/remote_name/remote_path 模糊查询",
                 "consumes": [
                     "application/json"
                 ],
@@ -156,8 +552,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "任务状态: pending|running|success|failed，空为全部",
+                        "description": "任务状态: pending|running|success|failed|paused|canceled，空为全部",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "关键词：对所属文件夹名/文件名/本地路径/网盘名/上传路径模糊查询",
+                        "name": "keyword",
                         "in": "query"
                     },
                     {
@@ -195,6 +597,11 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "新建一个上传任务（默认状态为待上传）",
                 "consumes": [
                     "application/json"
@@ -213,7 +620,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.TaskCreateReq"
+                            "$ref": "#/definitions/internal_api.TaskCreateReq"
                         }
                     }
                 ],
@@ -221,7 +628,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.UploadTask"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadTask"
                         }
                     },
                     "400": {
@@ -245,8 +652,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tasks/batch/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "批量取消上传任务",
+                "parameters": [
+                    {
+                        "description": "任务 ID 列表",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.TaskBatchReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
+                        }
+                    }
+                }
+            }
+        },
         "/api/tasks/batch/delete": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "对传入的任务 ID 列表执行删除操作，running 状态的任务会失败并给出原因",
                 "consumes": [
                     "application/json"
@@ -265,7 +715,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.TaskBatchReq"
+                            "$ref": "#/definitions/internal_api.TaskBatchReq"
                         }
                     }
                 ],
@@ -273,7 +723,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.TaskBatchResult"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -290,6 +740,11 @@ const docTemplate = `{
         },
         "/api/tasks/batch/pause": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "对传入的任务 ID 列表执行暂停操作，running 状态的任务会失败并给出原因",
                 "consumes": [
                     "application/json"
@@ -308,7 +763,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.TaskBatchReq"
+                            "$ref": "#/definitions/internal_api.TaskBatchReq"
                         }
                     }
                 ],
@@ -316,7 +771,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.TaskBatchResult"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -333,6 +788,11 @@ const docTemplate = `{
         },
         "/api/tasks/batch/retry": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "对传入的任务 ID 列表执行重试操作，running 状态的任务会失败并给出原因",
                 "consumes": [
                     "application/json"
@@ -351,7 +811,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.TaskBatchReq"
+                            "$ref": "#/definitions/internal_api.TaskBatchReq"
                         }
                     }
                 ],
@@ -359,7 +819,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.TaskBatchResult"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.TaskBatchResult"
                         }
                     },
                     "400": {
@@ -375,7 +835,52 @@ const docTemplate = `{
             }
         },
         "/api/tasks/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "获取上传任务",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadTask"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "上传中的任务不可删除",
                 "produces": [
                     "application/json"
@@ -424,8 +929,50 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tasks/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "等待中的任务立即取消；运行中的任务在 worker 心跳后终止 rclone 进程",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "取消上传任务",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "boolean"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/tasks/{id}/logs": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "按任务 ID 返回 upload_logs 中的日志列表，支持 limit 限制条数",
                 "consumes": [
                     "application/json"
@@ -458,12 +1005,21 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/model.UploadLog"
+                                "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadLog"
                             }
                         }
                     },
                     "400": {
                         "description": "invalid id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "task not found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -485,6 +1041,11 @@ const docTemplate = `{
         },
         "/api/tasks/{id}/pause": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "上传中的任务不可暂停",
                 "produces": [
                     "application/json"
@@ -533,8 +1094,67 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tasks/{id}/retry": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "重试上传任务",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "boolean"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/watch-folders": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "按状态分页获取监听文件夹列表",
                 "produces": [
                     "application/json"
@@ -548,6 +1168,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "状态: detecting|watching|stopped|paused|error",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "关键词：对 name/local_path/remote_name/remote_path 模糊查询",
+                        "name": "keyword",
                         "in": "query"
                     },
                     {
@@ -585,6 +1211,11 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "新增一个被监听并同步到指定 rclone remote 的本地目录",
                 "consumes": [
                     "application/json"
@@ -603,7 +1234,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.WatchFolderCreateReq"
+                            "$ref": "#/definitions/internal_api.WatchFolderCreateReq"
                         }
                     }
                 ],
@@ -611,11 +1242,20 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.WatchFolder"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -637,6 +1277,11 @@ const docTemplate = `{
         },
         "/api/watch-folders/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -657,7 +1302,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.WatchFolder"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
                         }
                     },
                     "404": {
@@ -672,6 +1317,11 @@ const docTemplate = `{
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -696,7 +1346,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.WatchFolderUpdateReq"
+                            "$ref": "#/definitions/internal_api.WatchFolderUpdateReq"
                         }
                     }
                 ],
@@ -704,11 +1354,20 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.WatchFolder"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.WatchFolder"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -728,6 +1387,12 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "原子取消该目录的未完成任务并解除文件快照归属；活动扫描期间返回冲突",
                 "produces": [
                     "application/json"
                 ],
@@ -754,6 +1419,24 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -768,7 +1451,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "api.FSSubDir": {
+        "internal_api.FSSubDir": {
             "type": "object",
             "properties": {
                 "has_sub_dirs": {
@@ -782,18 +1465,35 @@ const docTemplate = `{
                 }
             }
         },
-        "api.FSSubDirListResponse": {
+        "internal_api.FSSubDirListResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/api.FSSubDir"
+                        "$ref": "#/definitions/internal_api.FSSubDir"
                     }
                 }
             }
         },
-        "api.TaskBatchReq": {
+        "internal_api.LoginRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "username"
+            ],
+            "properties": {
+                "password": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "username": {
+                    "type": "string",
+                    "maxLength": 255
+                }
+            }
+        },
+        "internal_api.TaskBatchReq": {
             "type": "object",
             "required": [
                 "ids"
@@ -802,13 +1502,15 @@ const docTemplate = `{
                 "ids": {
                     "description": "任务 ID 列表",
                     "type": "array",
+                    "maxItems": 1000,
+                    "minItems": 1,
                     "items": {
                         "type": "integer"
                     }
                 }
             }
         },
-        "api.TaskCreateReq": {
+        "internal_api.TaskCreateReq": {
             "type": "object",
             "required": [
                 "local_path",
@@ -839,7 +1541,7 @@ const docTemplate = `{
                 }
             }
         },
-        "api.WatchFolderCreateReq": {
+        "internal_api.WatchFolderCreateReq": {
             "type": "object",
             "required": [
                 "local_path",
@@ -848,6 +1550,10 @@ const docTemplate = `{
                 "remote_path"
             ],
             "properties": {
+                "filter_keywords": {
+                    "description": "可选，多行关键字，换行分隔，扫描时模糊匹配排除",
+                    "type": "string"
+                },
                 "local_path": {
                     "type": "string"
                 },
@@ -874,11 +1580,14 @@ const docTemplate = `{
                 }
             }
         },
-        "api.WatchFolderUpdateReq": {
+        "internal_api.WatchFolderUpdateReq": {
             "type": "object",
             "properties": {
                 "enabled": {
                     "type": "boolean"
+                },
+                "filter_keywords": {
+                    "type": "string"
                 },
                 "local_path": {
                     "type": "string"
@@ -906,27 +1615,44 @@ const docTemplate = `{
                 }
             }
         },
-        "model.FileRecord": {
+        "rclone-sync-hub_internal_model.FileRecord": {
             "type": "object",
             "properties": {
                 "createdAt": {
                     "type": "string"
                 },
                 "fileHash": {
-                    "description": "可选，用于去重",
+                    "description": "可选，内容哈希用于强校验",
+                    "type": "string"
+                },
+                "fileModTime": {
                     "type": "string"
                 },
                 "fileSize": {
                     "type": "integer"
                 },
+                "fingerprint": {
+                    "description": "size + mtime 的快速元数据指纹",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
+                },
+                "lastSeenAt": {
+                    "type": "string"
                 },
                 "localPath": {
                     "type": "string"
                 },
+                "missingAt": {
+                    "description": "最近一次完整扫描确认文件已不存在",
+                    "type": "string"
+                },
                 "relativePath": {
                     "description": "相对扫描根目录的路径",
+                    "type": "string"
+                },
+                "remoteName": {
                     "type": "string"
                 },
                 "remotePath": {
@@ -937,10 +1663,13 @@ const docTemplate = `{
                 },
                 "uploadedAt": {
                     "type": "string"
+                },
+                "watchFolderID": {
+                    "type": "integer"
                 }
             }
         },
-        "model.UploadLog": {
+        "rclone-sync-hub_internal_model.UploadLog": {
             "type": "object",
             "properties": {
                 "bytesDone": {
@@ -970,12 +1699,19 @@ const docTemplate = `{
                 }
             }
         },
-        "model.UploadTask": {
+        "rclone-sync-hub_internal_model.UploadTask": {
             "type": "object",
             "properties": {
                 "accumulatedFailures": {
                     "description": "累计失败次数（便于分析）",
                     "type": "integer"
+                },
+                "cancelRequestedAt": {
+                    "description": "运行中任务的取消请求",
+                    "type": "string"
+                },
+                "canceledAt": {
+                    "type": "string"
                 },
                 "createdAt": {
                     "type": "string"
@@ -988,6 +1724,10 @@ const docTemplate = `{
                     "description": "最后一次错误信息",
                     "type": "string"
                 },
+                "fileFingerprint": {
+                    "description": "创建任务时的文件元数据指纹",
+                    "type": "string"
+                },
                 "fileName": {
                     "description": "文件名",
                     "type": "string"
@@ -996,7 +1736,7 @@ const docTemplate = `{
                     "description": "关联（不参与表结构，仅查询用）",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/model.FileRecord"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_model.FileRecord"
                         }
                     ]
                 },
@@ -1011,8 +1751,16 @@ const docTemplate = `{
                     "description": "上传结束时间",
                     "type": "string"
                 },
+                "heartbeatAt": {
+                    "description": "最近一次租约心跳",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
+                },
+                "idempotencyKey": {
+                    "description": "nullable，兼容旧数据并防止重复建任务",
+                    "type": "string"
                 },
                 "lastProgressAt": {
                     "description": "最近一次进度上报时间",
@@ -1022,6 +1770,14 @@ const docTemplate = `{
                     "description": "最近一次状态变更时间",
                     "type": "string"
                 },
+                "leaseExpiresAt": {
+                    "description": "租约到期时间",
+                    "type": "string"
+                },
+                "leaseOwner": {
+                    "description": "当前 worker 实例",
+                    "type": "string"
+                },
                 "localPath": {
                     "description": "文件本地路径",
                     "type": "string"
@@ -1029,6 +1785,14 @@ const docTemplate = `{
                 "log": {
                     "description": "日志与分析",
                     "type": "string"
+                },
+                "nextRetryAt": {
+                    "description": "下次允许领取时间",
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "数值越大优先级越高",
+                    "type": "integer"
                 },
                 "progress": {
                     "description": "上传进度（0-100）",
@@ -1043,7 +1807,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "retryCount": {
-                    "description": "重试次数",
+                    "description": "已领取执行次数（包含首次）",
                     "type": "integer"
                 },
                 "speed": {
@@ -1071,7 +1835,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.WatchFolder": {
+        "rclone-sync-hub_internal_model.WatchFolder": {
             "type": "object",
             "properties": {
                 "createdAt": {
@@ -1085,6 +1849,10 @@ const docTemplate = `{
                     "description": "累计上传失败文件数",
                     "type": "integer"
                 },
+                "filterKeywords": {
+                    "description": "过滤关键字，多行存储，每行一个；路径或文件名包含任一关键字（模糊匹配）则排除",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -1097,7 +1865,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "lastScanAt": {
-                    "description": "最近一次扫描时间",
+                    "description": "兼容字段：最近一次扫描开始时间",
+                    "type": "string"
+                },
+                "lastScanDurationMs": {
+                    "description": "最近一次扫描耗时（毫秒）",
+                    "type": "integer"
+                },
+                "lastScanFinishedAt": {
+                    "description": "最近一次扫描结束时间（无论成功失败）",
+                    "type": "string"
+                },
+                "lastScanStartedAt": {
+                    "description": "最近一次扫描开始时间",
+                    "type": "string"
+                },
+                "lastScanSuccessAt": {
+                    "description": "最近一次成功扫描结束时间",
                     "type": "string"
                 },
                 "lastSyncAt": {
@@ -1131,6 +1915,12 @@ const docTemplate = `{
                 "scanIntervalSeconds": {
                     "description": "配置相关扩展",
                     "type": "integer"
+                },
+                "scanLeaseExpiresAt": {
+                    "type": "string"
+                },
+                "scanLeaseOwner": {
+                    "type": "string"
                 },
                 "status": {
                     "description": "状态信息",
@@ -1169,35 +1959,35 @@ const docTemplate = `{
                 }
             }
         },
-        "service.DashboardData": {
+        "rclone-sync-hub_internal_service.DashboardData": {
             "type": "object",
             "properties": {
                 "by_status": {
                     "description": "ByStatus 按状态分布（饼图/柱状图）",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.StatusItemVO"
+                        "$ref": "#/definitions/rclone-sync-hub_internal_service.StatusItemVO"
                     }
                 },
                 "by_time": {
                     "description": "ByTime 按日趋势（折线图）",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.TimeItemVO"
+                        "$ref": "#/definitions/rclone-sync-hub_internal_service.TimeItemVO"
                     }
                 },
                 "by_watch_folder": {
                     "description": "ByWatchFolder 按监听文件夹分布（表格+柱状图）",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.WatchFolderItemVO"
+                        "$ref": "#/definitions/rclone-sync-hub_internal_service.WatchFolderItemVO"
                     }
                 },
                 "items": {
                     "description": "Items 列表类数据",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/service.DashboardItemsVO"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.DashboardItemsVO"
                         }
                     ]
                 },
@@ -1205,36 +1995,39 @@ const docTemplate = `{
                     "description": "Overview 概览数字（卡片）",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/service.OverviewVO"
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.OverviewVO"
                         }
                     ]
                 }
             }
         },
-        "service.DashboardItemsVO": {
+        "rclone-sync-hub_internal_service.DashboardItemsVO": {
             "type": "object",
             "properties": {
                 "failed_tasks": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.UploadTask"
+                        "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadTask"
                     }
                 },
                 "recent_tasks": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.UploadTask"
+                        "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadTask"
                     }
                 }
             }
         },
-        "service.OverviewVO": {
+        "rclone-sync-hub_internal_service.OverviewVO": {
             "type": "object",
             "properties": {
                 "recent_24h_completed": {
                     "type": "integer"
                 },
                 "recent_24h_failed": {
+                    "type": "integer"
+                },
+                "task_canceled": {
                     "type": "integer"
                 },
                 "task_failed": {
@@ -1266,7 +2059,7 @@ const docTemplate = `{
                 }
             }
         },
-        "service.StatusItemVO": {
+        "rclone-sync-hub_internal_service.StatusItemVO": {
             "type": "object",
             "properties": {
                 "count": {
@@ -1280,11 +2073,10 @@ const docTemplate = `{
                 }
             }
         },
-        "service.TaskBatchResult": {
+        "rclone-sync-hub_internal_service.TaskBatchResult": {
             "type": "object",
             "properties": {
                 "failed": {
-                    "description": "taskID -\u003e error message",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -1298,7 +2090,7 @@ const docTemplate = `{
                 }
             }
         },
-        "service.TimeItemVO": {
+        "rclone-sync-hub_internal_service.TimeItemVO": {
             "type": "object",
             "properties": {
                 "completed_count": {
@@ -1315,9 +2107,12 @@ const docTemplate = `{
                 }
             }
         },
-        "service.WatchFolderItemVO": {
+        "rclone-sync-hub_internal_service.WatchFolderItemVO": {
             "type": "object",
             "properties": {
+                "canceled_count": {
+                    "type": "integer"
+                },
                 "failed_count": {
                     "type": "integer"
                 },
@@ -1350,17 +2145,24 @@ const docTemplate = `{
                 }
             }
         }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
     }
 }`
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
-	Host:             "localhost:8080",
+	Version:          "2.0",
+	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Rclone Sync Hub API",
-	Description:      "文件上传调度系统 REST API：任务列表、扫描、重试、统计等",
+	Description:      "面向生产环境的本地文件扫描、持久化上传队列与 rclone 调度 API。",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

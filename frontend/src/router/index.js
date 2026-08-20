@@ -1,9 +1,15 @@
-import Dashboard from '../views/Dashboard.vue';
-import FolderManager from '../views/FolderManager.vue';
-import TaskList from '../views/TaskList.vue';
-import Settings from '../views/Settings.vue';
+const Dashboard = () => import('../views/Dashboard.vue');
+const FolderManager = () => import('../views/FolderManager.vue');
+const TaskList = () => import('../views/TaskList.vue');
+const Login = () => import('../views/Login.vue');
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: Login,
+    meta: { title: '登录', public: true }
+  },
   {
     path: '/',
     redirect: '/dashboard'
@@ -27,10 +33,8 @@ const routes = [
     meta: { title: '任务列表' }
   },
   {
-    path: '/settings',
-    name: 'Settings',
-    component: Settings,
-    meta: { title: '全局设置' }
+    path: '/:pathMatch(.*)*',
+    redirect: '/dashboard'
   }
 ];
 

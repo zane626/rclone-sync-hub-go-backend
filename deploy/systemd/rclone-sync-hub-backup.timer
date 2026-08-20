@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Rclone Sync Hub database backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=rclone-sync-hub-backup.service
+
+[Install]
+WantedBy=timers.target

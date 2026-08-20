@@ -1,6 +1,6 @@
 basePath: /
 definitions:
-  api.FSSubDir:
+  internal_api.FSSubDir:
     properties:
       has_sub_dirs:
         type: boolean
@@ -9,24 +9,38 @@ definitions:
       path:
         type: string
     type: object
-  api.FSSubDirListResponse:
+  internal_api.FSSubDirListResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/api.FSSubDir'
+          $ref: '#/definitions/internal_api.FSSubDir'
         type: array
     type: object
-  api.TaskBatchReq:
+  internal_api.LoginRequest:
+    properties:
+      password:
+        maxLength: 1024
+        type: string
+      username:
+        maxLength: 255
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  internal_api.TaskBatchReq:
     properties:
       ids:
         description: 任务 ID 列表
         items:
           type: integer
+        maxItems: 1000
+        minItems: 1
         type: array
     required:
     - ids
     type: object
-  api.TaskCreateReq:
+  internal_api.TaskCreateReq:
     properties:
       file_name:
         type: string
@@ -47,8 +61,11 @@ definitions:
     - remote_name
     - remote_path
     type: object
-  api.WatchFolderCreateReq:
+  internal_api.WatchFolderCreateReq:
     properties:
+      filter_keywords:
+        description: 可选，多行关键字，换行分隔，扫描时模糊匹配排除
+        type: string
       local_path:
         type: string
       max_depth:
@@ -72,10 +89,12 @@ definitions:
     - remote_name
     - remote_path
     type: object
-  api.WatchFolderUpdateReq:
+  internal_api.WatchFolderUpdateReq:
     properties:
       enabled:
         type: boolean
+      filter_keywords:
+        type: string
       local_path:
         type: string
       max_depth:
@@ -93,21 +112,33 @@ definitions:
       sync_type:
         type: string
     type: object
-  model.FileRecord:
+  rclone-sync-hub_internal_model.FileRecord:
     properties:
       createdAt:
         type: string
       fileHash:
-        description: 可选，用于去重
+        description: 可选，内容哈希用于强校验
+        type: string
+      fileModTime:
         type: string
       fileSize:
         type: integer
+      fingerprint:
+        description: size + mtime 的快速元数据指纹
+        type: string
       id:
         type: integer
+      lastSeenAt:
+        type: string
       localPath:
+        type: string
+      missingAt:
+        description: 最近一次完整扫描确认文件已不存在
         type: string
       relativePath:
         description: 相对扫描根目录的路径
+        type: string
+      remoteName:
         type: string
       remotePath:
         type: string
@@ -115,8 +146,10 @@ definitions:
         type: string
       uploadedAt:
         type: string
+      watchFolderID:
+        type: integer
     type: object
-  model.UploadLog:
+  rclone-sync-hub_internal_model.UploadLog:
     properties:
       bytesDone:
         type: integer
@@ -136,11 +169,16 @@ definitions:
       taskID:
         type: integer
     type: object
-  model.UploadTask:
+  rclone-sync-hub_internal_model.UploadTask:
     properties:
       accumulatedFailures:
         description: 累计失败次数（便于分析）
         type: integer
+      cancelRequestedAt:
+        description: 运行中任务的取消请求
+        type: string
+      canceledAt:
+        type: string
       createdAt:
         type: string
       durationSeconds:
@@ -149,12 +187,15 @@ definitions:
       errorMsg:
         description: 最后一次错误信息
         type: string
+      fileFingerprint:
+        description: 创建任务时的文件元数据指纹
+        type: string
       fileName:
         description: 文件名
         type: string
       fileRecord:
         allOf:
-        - $ref: '#/definitions/model.FileRecord'
+        - $ref: '#/definitions/rclone-sync-hub_internal_model.FileRecord'
         description: 关联（不参与表结构，仅查询用）
       fileRecordID:
         type: integer
@@ -164,13 +205,25 @@ definitions:
       finishedAt:
         description: 上传结束时间
         type: string
+      heartbeatAt:
+        description: 最近一次租约心跳
+        type: string
       id:
         type: integer
+      idempotencyKey:
+        description: nullable，兼容旧数据并防止重复建任务
+        type: string
       lastProgressAt:
         description: 最近一次进度上报时间
         type: string
       lastStatusAt:
         description: 最近一次状态变更时间
+        type: string
+      leaseExpiresAt:
+        description: 租约到期时间
+        type: string
+      leaseOwner:
+        description: 当前 worker 实例
         type: string
       localPath:
         description: 文件本地路径
@@ -178,6 +231,12 @@ definitions:
       log:
         description: 日志与分析
         type: string
+      nextRetryAt:
+        description: 下次允许领取时间
+        type: string
+      priority:
+        description: 数值越大优先级越高
+        type: integer
       progress:
         description: 上传进度（0-100）
         type: number
@@ -188,7 +247,7 @@ definitions:
         description: 上传路径
         type: string
       retryCount:
-        description: 重试次数
+        description: 已领取执行次数（包含首次）
         type: integer
       speed:
         description: 最近一次上报的速度（bytes/s）
@@ -208,7 +267,7 @@ definitions:
         description: 所属监听文件夹名称快照
         type: string
     type: object
-  model.WatchFolder:
+  rclone-sync-hub_internal_model.WatchFolder:
     properties:
       createdAt:
         type: string
@@ -218,6 +277,9 @@ definitions:
       failedFileCount:
         description: 累计上传失败文件数
         type: integer
+      filterKeywords:
+        description: 过滤关键字，多行存储，每行一个；路径或文件名包含任一关键字（模糊匹配）则排除
+        type: string
       id:
         type: integer
       lastActiveAt:
@@ -227,7 +289,19 @@ definitions:
         description: 最近一次错误信息（便于排查）
         type: string
       lastScanAt:
-        description: 最近一次扫描时间
+        description: 兼容字段：最近一次扫描开始时间
+        type: string
+      lastScanDurationMs:
+        description: 最近一次扫描耗时（毫秒）
+        type: integer
+      lastScanFinishedAt:
+        description: 最近一次扫描结束时间（无论成功失败）
+        type: string
+      lastScanStartedAt:
+        description: 最近一次扫描开始时间
+        type: string
+      lastScanSuccessAt:
+        description: 最近一次成功扫描结束时间
         type: string
       lastSyncAt:
         description: 最近一次同步时间
@@ -254,6 +328,10 @@ definitions:
       scanIntervalSeconds:
         description: 配置相关扩展
         type: integer
+      scanLeaseExpiresAt:
+        type: string
+      scanLeaseOwner:
+        type: string
       status:
         description: 状态信息
         type: string
@@ -281,48 +359,50 @@ definitions:
         description: 最近一段时间的窗口统计（可用于展示趋势）
         type: integer
     type: object
-  service.DashboardData:
+  rclone-sync-hub_internal_service.DashboardData:
     properties:
       by_status:
         description: ByStatus 按状态分布（饼图/柱状图）
         items:
-          $ref: '#/definitions/service.StatusItemVO'
+          $ref: '#/definitions/rclone-sync-hub_internal_service.StatusItemVO'
         type: array
       by_time:
         description: ByTime 按日趋势（折线图）
         items:
-          $ref: '#/definitions/service.TimeItemVO'
+          $ref: '#/definitions/rclone-sync-hub_internal_service.TimeItemVO'
         type: array
       by_watch_folder:
         description: ByWatchFolder 按监听文件夹分布（表格+柱状图）
         items:
-          $ref: '#/definitions/service.WatchFolderItemVO'
+          $ref: '#/definitions/rclone-sync-hub_internal_service.WatchFolderItemVO'
         type: array
       items:
         allOf:
-        - $ref: '#/definitions/service.DashboardItemsVO'
+        - $ref: '#/definitions/rclone-sync-hub_internal_service.DashboardItemsVO'
         description: Items 列表类数据
       overview:
         allOf:
-        - $ref: '#/definitions/service.OverviewVO'
+        - $ref: '#/definitions/rclone-sync-hub_internal_service.OverviewVO'
         description: Overview 概览数字（卡片）
     type: object
-  service.DashboardItemsVO:
+  rclone-sync-hub_internal_service.DashboardItemsVO:
     properties:
       failed_tasks:
         items:
-          $ref: '#/definitions/model.UploadTask'
+          $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
         type: array
       recent_tasks:
         items:
-          $ref: '#/definitions/model.UploadTask'
+          $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
         type: array
     type: object
-  service.OverviewVO:
+  rclone-sync-hub_internal_service.OverviewVO:
     properties:
       recent_24h_completed:
         type: integer
       recent_24h_failed:
+        type: integer
+      task_canceled:
         type: integer
       task_failed:
         type: integer
@@ -343,7 +423,7 @@ definitions:
       watch_folder_count:
         type: integer
     type: object
-  service.StatusItemVO:
+  rclone-sync-hub_internal_service.StatusItemVO:
     properties:
       count:
         type: integer
@@ -352,19 +432,18 @@ definitions:
       status:
         type: string
     type: object
-  service.TaskBatchResult:
+  rclone-sync-hub_internal_service.TaskBatchResult:
     properties:
       failed:
         additionalProperties:
           type: string
-        description: taskID -> error message
         type: object
       ok_ids:
         items:
           type: integer
         type: array
     type: object
-  service.TimeItemVO:
+  rclone-sync-hub_internal_service.TimeItemVO:
     properties:
       completed_count:
         type: integer
@@ -375,8 +454,10 @@ definitions:
       uploaded_bytes:
         type: integer
     type: object
-  service.WatchFolderItemVO:
+  rclone-sync-hub_internal_service.WatchFolderItemVO:
     properties:
+      canceled_count:
+        type: integer
       failed_count:
         type: integer
       paused_count:
@@ -398,18 +479,13 @@ definitions:
       watch_folder_name:
         type: string
     type: object
-host: localhost:8080
 info:
   contact:
-    name: API Support
-    url: https://github.com/your-org/rclone-sync-hub
-  description: 文件上传调度系统 REST API：任务列表、扫描、重试、统计等
-  license:
-    name: Apache 2.0
-    url: http://www.apache.org/licenses/LICENSE-2.0.html
-  termsOfService: http://swagger.io/terms/
+    name: Project repository
+    url: https://github.com/zane626/rclone-sync-hub-go-backend
+  description: 面向生产环境的本地文件扫描、持久化上传队列与 rclone 调度 API。
   title: Rclone Sync Hub API
-  version: "1.0"
+  version: "2.0"
 paths:
   /api/analytics/dashboard:
     get:
@@ -427,16 +503,145 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.DashboardData'
+            $ref: '#/definitions/rclone-sync-hub_internal_service.DashboardData'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 数据分析仪表盘
       tags:
       - analytics
+  /api/audit-logs:
+    get:
+      parameters:
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 50
+        description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取操作审计日志
+      tags:
+      - operations
+  /api/auth/config:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+      summary: 获取认证配置
+      tags:
+      - auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 用户名和密码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 登录
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取当前用户
+      tags:
+      - auth
+  /api/events:
+    get:
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 订阅任务实时事件
+      tags:
+      - events
   /api/fs/subdirs:
     get:
       description: 根据传入的本地路径，返回该路径下所有一级子文件夹（不包含文件）
@@ -452,7 +657,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/api.FSSubDirListResponse'
+            $ref: '#/definitions/internal_api.FSSubDirListResponse'
         "400":
           description: Bad Request
           schema:
@@ -465,12 +670,65 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 获取指定路径下的子文件夹
       tags:
       - filesystem
+  /api/health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 兼容健康检查
+      tags:
+      - health
+  /api/health/live:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 存活检查
+      tags:
+      - health
+  /api/health/ready:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 就绪检查
+      tags:
+      - health
   /api/rclone/configs:
     get:
-      description: 调用 `rclone config show` 并解析出 remote 名称与类型，过滤掉敏感字段
+      description: 调用 `rclone listremotes --long` 获取 remote 名称与类型，不读取配置密钥
       produces:
       - application/json
       responses:
@@ -485,18 +743,89 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 获取 rclone remote 配置列表
       tags:
       - rclone
+  /api/scan:
+    post:
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 异步触发全部启用目录扫描
+      tags:
+      - scanner
+  /api/scan-runs:
+    get:
+      parameters:
+      - description: 监听目录 ID；0 为全部
+        in: query
+        name: watch_folder_id
+        type: integer
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 50
+        description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取扫描历史
+      tags:
+      - operations
+  /api/stats:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取任务状态统计
+      tags:
+      - tasks
   /api/tasks:
     get:
       consumes:
       - application/json
-      description: 按状态筛选并分页返回上传任务，不传 status 时返回全部
+      description: 按状态筛选并分页返回上传任务，不传 status 时返回全部；keyword 对 watch_folder_name/file_name/local_path/remote_name/remote_path
+        模糊查询
       parameters:
-      - description: '任务状态: pending|running|success|failed，空为全部'
+      - description: '任务状态: pending|running|success|failed|paused|canceled，空为全部'
         in: query
         name: status
+        type: string
+      - description: 关键词：对所属文件夹名/文件名/本地路径/网盘名/上传路径模糊查询
+        in: query
+        name: keyword
         type: string
       - default: 1
         description: 页码，从 1 开始
@@ -522,6 +851,8 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 分页获取上传任务列表
       tags:
       - tasks
@@ -535,14 +866,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.TaskCreateReq'
+          $ref: '#/definitions/internal_api.TaskCreateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.UploadTask'
+            $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
         "400":
           description: Bad Request
           schema:
@@ -555,6 +886,8 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 创建上传任务
       tags:
       - tasks
@@ -588,7 +921,57 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 删除上传任务
+      tags:
+      - tasks
+    get:
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取上传任务
+      tags:
+      - tasks
+  /api/tasks/{id}/cancel:
+    post:
+      description: 等待中的任务立即取消；运行中的任务在 worker 心跳后终止 rclone 进程
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 取消上传任务
       tags:
       - tasks
   /api/tasks/{id}/logs:
@@ -613,10 +996,16 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/model.UploadLog'
+              $ref: '#/definitions/rclone-sync-hub_internal_model.UploadLog'
             type: array
         "400":
           description: invalid id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: task not found
           schema:
             additionalProperties:
               type: string
@@ -627,6 +1016,8 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 获取任务上传日志
       tags:
       - tasks
@@ -660,7 +1051,66 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 暂停上传任务
+      tags:
+      - tasks
+  /api/tasks/{id}/retry:
+    post:
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 重试上传任务
+      tags:
+      - tasks
+  /api/tasks/batch/cancel:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 任务 ID 列表
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.TaskBatchReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
+      security:
+      - BearerAuth: []
+      summary: 批量取消上传任务
       tags:
       - tasks
   /api/tasks/batch/delete:
@@ -674,20 +1124,22 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.TaskBatchReq'
+          $ref: '#/definitions/internal_api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.TaskBatchResult'
+            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 批量删除上传任务
       tags:
       - tasks
@@ -702,20 +1154,22 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.TaskBatchReq'
+          $ref: '#/definitions/internal_api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.TaskBatchResult'
+            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 批量暂停上传任务
       tags:
       - tasks
@@ -730,20 +1184,22 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.TaskBatchReq'
+          $ref: '#/definitions/internal_api.TaskBatchReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.TaskBatchResult'
+            $ref: '#/definitions/rclone-sync-hub_internal_service.TaskBatchResult'
         "400":
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 批量重试上传任务
       tags:
       - tasks
@@ -754,6 +1210,10 @@ paths:
       - description: '状态: detecting|watching|stopped|paused|error'
         in: query
         name: status
+        type: string
+      - description: 关键词：对 name/local_path/remote_name/remote_path 模糊查询
+        in: query
+        name: keyword
         type: string
       - default: 1
         description: 页码，从 1 开始
@@ -779,6 +1239,8 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 列出监听文件夹
       tags:
       - watch-folders
@@ -792,16 +1254,22 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.WatchFolderCreateReq'
+          $ref: '#/definitions/internal_api.WatchFolderCreateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.WatchFolder'
+            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
         "400":
           description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
           schema:
             additionalProperties:
               type: string
@@ -812,11 +1280,14 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 创建监听文件夹
       tags:
       - watch-folders
   /api/watch-folders/{id}:
     delete:
+      description: 原子取消该目录的未完成任务并解除文件快照归属；活动扫描期间返回冲突
       parameters:
       - description: 监听文件夹 ID
         in: path
@@ -832,12 +1303,26 @@ paths:
             additionalProperties:
               type: boolean
             type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 删除监听文件夹
       tags:
       - watch-folders
@@ -854,13 +1339,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.WatchFolder'
+            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
         "404":
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 获取监听文件夹详情
       tags:
       - watch-folders
@@ -878,16 +1365,22 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/api.WatchFolderUpdateReq'
+          $ref: '#/definitions/internal_api.WatchFolderUpdateReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.WatchFolder'
+            $ref: '#/definitions/rclone-sync-hub_internal_model.WatchFolder'
         "400":
           description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
           schema:
             additionalProperties:
               type: string
@@ -898,7 +1391,14 @@ paths:
             additionalProperties:
               type: string
             type: object
+      security:
+      - BearerAuth: []
       summary: 更新监听文件夹
       tags:
       - watch-folders
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"

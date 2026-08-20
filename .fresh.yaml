@@ -1,6 +1,6 @@
-# Fresh 热重载配置（兼容 Go 1.22）
+# Fresh 热重载配置（Go 1.25+）
 # 使用：在项目根目录执行 fresh 或 make dev
-# 安装：go install github.com/zzwx/fresh@latest
+# 安装：go install github.com/zzwx/fresh@v1.3.4
 
 version: 1
 root: .

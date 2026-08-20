@@ -2,10 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"rclone-sync-hub/internal/apperror"
 	"rclone-sync-hub/internal/model"
 	"rclone-sync-hub/internal/repository"
+	"rclone-sync-hub/internal/security"
 )
 
 // WatchFolderService 监听文件夹业务接口。
@@ -18,12 +24,13 @@ type WatchFolderService interface {
 }
 
 type watchFolderService struct {
-	repo repository.WatchFolderRepository
+	repo   repository.WatchFolderRepository
+	policy *security.ResourcePolicy
 }
 
 // NewWatchFolderService 创建 WatchFolderService。
-func NewWatchFolderService(repo repository.WatchFolderRepository) WatchFolderService {
-	return &watchFolderService{repo: repo}
+func NewWatchFolderService(repo repository.WatchFolderRepository, policy *security.ResourcePolicy) WatchFolderService {
+	return &watchFolderService{repo: repo, policy: policy}
 }
 
 // CreateWatchFolderInput 创建监听文件夹的入参。
@@ -53,6 +60,23 @@ type UpdateWatchFolderInput struct {
 }
 
 func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInput) (*model.WatchFolder, error) {
+	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 255 {
+		return nil, apperror.Validation("name is required and must not exceed 255 characters", nil)
+	}
+	localPath, err := s.policy.ValidateLocalDirectory(in.LocalPath)
+	if err != nil {
+		return nil, apperror.Validation("local directory is invalid, inaccessible, or outside the allowlist", err)
+	}
+	remotePath, err := s.policy.ValidateRemote(in.RemoteName, in.RemotePath)
+	if err != nil {
+		return nil, apperror.Validation("remote destination is invalid or outside the allowlist", err)
+	}
+	if in.MaxDepth < 0 || in.MaxDepth > 1000 {
+		return nil, apperror.Validation("max_depth must be between 0 and 1000", nil)
+	}
+	if len(in.FilterKeywords) > 16*1024 {
+		return nil, apperror.Validation("filter_keywords is too large", nil)
+	}
 	now := time.Now()
 	syncType := in.SyncType
 	if syncType == "" {
@@ -62,29 +86,48 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 	if interval <= 0 {
 		interval = 300
 	}
+	if interval < 10 || interval > 7*24*60*60 {
+		return nil, apperror.Validation("scan_interval_seconds must be between 10 and 604800", nil)
+	}
+	if syncType != model.WatchFolderSyncTypeLocalToRemote {
+		return nil, apperror.Validation("unsupported sync_type", nil)
+	}
+	if err := s.ensurePathDoesNotOverlap(ctx, 0, localPath); err != nil {
+		return nil, err
+	}
 	f := &model.WatchFolder{
-		Name:               in.Name,
-		LocalPath:          in.LocalPath,
-		RemoteName:         in.RemoteName,
-		RemotePath:         in.RemotePath,
-		SyncType:           syncType,
-		MaxDepth:           in.MaxDepth,
-		FilterKeywords:     in.FilterKeywords,
+		Name:                in.Name,
+		LocalPath:           localPath,
+		RemoteName:          in.RemoteName,
+		RemotePath:          remotePath,
+		SyncType:            syncType,
+		MaxDepth:            in.MaxDepth,
+		FilterKeywords:      in.FilterKeywords,
 		ScanIntervalSeconds: interval,
-		Status:             model.WatchFolderStatusWatching,
-		Enabled:            true,
-		LastActiveAt:       &now,
+		Status:              model.WatchFolderStatusWatching,
+		Enabled:             true,
+		LastActiveAt:        &now,
 	}
 	if err := s.repo.Create(f); err != nil {
-		return nil, err
+		return nil, watchFolderRepositoryError(err)
 	}
 	return f, nil
 }
 
 func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatchFolderInput) (*model.WatchFolder, error) {
-	f, err := s.repo.GetByID(id)
+	if in.ScanIntervalSecond != nil && (*in.ScanIntervalSecond < 10 || *in.ScanIntervalSecond > 7*24*60*60) {
+		return nil, apperror.Validation("scan_interval_seconds must be between 10 and 604800", nil)
+	}
+	if in.Status != nil && *in.Status != "" && *in.Status != model.WatchFolderStatusWatching && *in.Status != model.WatchFolderStatusStopped && *in.Status != model.WatchFolderStatusPaused {
+		return nil, apperror.Validation("status may only be watching, stopped, or paused", nil)
+	}
+	f, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	configurationChanged := in.Name != nil || in.LocalPath != nil || in.RemoteName != nil || in.RemotePath != nil || in.SyncType != nil || in.MaxDepth != nil || in.FilterKeywords != nil || in.ScanIntervalSecond != nil
+	if f.Status == model.WatchFolderStatusDetecting && configurationChanged {
+		return nil, apperror.Conflict("watch folder configuration cannot change during an active scan", nil)
 	}
 	if in.Name != nil {
 		f.Name = *in.Name
@@ -115,27 +158,150 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	}
 	if in.Enabled != nil {
 		f.Enabled = *in.Enabled
+		if !f.Enabled && in.Status == nil {
+			f.Status = model.WatchFolderStatusStopped
+		} else if f.Enabled && in.Status == nil && f.Status == model.WatchFolderStatusStopped {
+			f.Status = model.WatchFolderStatusWatching
+		}
 	}
-	if err := s.repo.Update(f); err != nil {
+	if strings.TrimSpace(f.Name) == "" || len(f.Name) > 255 {
+		return nil, apperror.Validation("name is required and must not exceed 255 characters", nil)
+	}
+	localPath, err := s.policy.ValidateLocalDirectory(f.LocalPath)
+	if err != nil {
+		return nil, apperror.Validation("local directory is invalid, inaccessible, or outside the allowlist", err)
+	}
+	remotePath, err := s.policy.ValidateRemote(f.RemoteName, f.RemotePath)
+	if err != nil {
+		return nil, apperror.Validation("remote destination is invalid or outside the allowlist", err)
+	}
+	if f.MaxDepth < 0 || f.MaxDepth > 1000 {
+		return nil, apperror.Validation("max_depth must be between 0 and 1000", nil)
+	}
+	if len(f.FilterKeywords) > 16*1024 {
+		return nil, apperror.Validation("filter_keywords is too large", nil)
+	}
+	if f.ScanIntervalSeconds < 10 || f.ScanIntervalSeconds > 7*24*60*60 {
+		return nil, apperror.Validation("scan_interval_seconds must be between 10 and 604800", nil)
+	}
+	if !validWatchFolderStatus(f.Status) {
+		return nil, apperror.Validation("invalid watch folder status", nil)
+	}
+	if f.SyncType != model.WatchFolderSyncTypeLocalToRemote {
+		return nil, apperror.Validation("unsupported sync_type", nil)
+	}
+	f.LocalPath = localPath
+	f.RemotePath = remotePath
+	if err := s.ensurePathDoesNotOverlap(ctx, id, localPath); err != nil {
 		return nil, err
+	}
+	if err := s.repo.Update(ctx, f, configurationChanged); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return nil, apperror.Conflict("watch folder changed concurrently, is being scanned, overlaps another path, or already exists", err)
+		}
+		return nil, watchFolderRepositoryError(err)
 	}
 	return f, nil
 }
 
+func (s *watchFolderService) ensurePathDoesNotOverlap(ctx context.Context, excludeID uint, candidate string) error {
+	folders, err := s.repo.ListPaths(ctx, excludeID)
+	if err != nil {
+		return err
+	}
+	for _, existing := range folders {
+		if localPathsOverlap(candidate, existing.LocalPath) {
+			return apperror.Conflict(fmt.Sprintf("local directory overlaps watch folder %q", existing.Name), nil)
+		}
+	}
+	return nil
+}
+
+func localPathsOverlap(left, right string) bool {
+	return pathContains(left, right) || pathContains(right, left)
+}
+
+func pathContains(root, candidate string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+// ValidateWatchFolderPathTopology fails startup when legacy data contains
+// overlapping roots that cannot safely share the absolute-path snapshot key.
+func ValidateWatchFolderPathTopology(ctx context.Context, repo repository.WatchFolderRepository) error {
+	folders, err := repo.ListPaths(ctx, 0)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(folders); i++ {
+		for j := i + 1; j < len(folders); j++ {
+			if localPathsOverlap(folders[i].LocalPath, folders[j].LocalPath) {
+				return fmt.Errorf("watch folders %d (%q) and %d (%q) have overlapping local directories; update or remove one before startup", folders[i].ID, folders[i].Name, folders[j].ID, folders[j].Name)
+			}
+		}
+	}
+	return nil
+}
+
+func validWatchFolderStatus(status string) bool {
+	switch status {
+	case model.WatchFolderStatusDetecting, model.WatchFolderStatusWatching, model.WatchFolderStatusStopped, model.WatchFolderStatusPaused, model.WatchFolderStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *watchFolderService) Delete(ctx context.Context, id uint) error {
-	return s.repo.Delete(id)
+	folder, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if folder.Status == model.WatchFolderStatusDetecting && (folder.ScanLeaseExpiresAt == nil || folder.ScanLeaseExpiresAt.After(time.Now())) {
+		return apperror.Conflict("watch folder cannot be deleted during an active scan", nil)
+	}
+	if err := s.repo.Delete(ctx, id); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return apperror.Conflict("watch folder cannot be deleted during an active scan", err)
+		}
+		return watchFolderRepositoryError(err)
+	}
+	return nil
 }
 
 func (s *watchFolderService) Get(ctx context.Context, id uint) (*model.WatchFolder, error) {
-	return s.repo.GetByID(id)
+	folder, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, watchFolderRepositoryError(err)
+	}
+	return folder, nil
+}
+
+func watchFolderRepositoryError(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return apperror.NotFound("watch folder not found", err)
+	}
+	if errors.Is(err, repository.ErrConflict) {
+		return apperror.Conflict("watch folder local path already exists", err)
+	}
+	return err
 }
 
 func (s *watchFolderService) List(ctx context.Context, status, keyword string, page, pageSize int) ([]model.WatchFolder, int64, error) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
 	if page <= 0 {
 		page = 1
+	}
+	if page > 10000 {
+		page = 10000
 	}
 	offset := (page - 1) * pageSize
 	return s.repo.List(status, keyword, offset, pageSize)

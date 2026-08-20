@@ -1,360 +1,564 @@
-// Package worker 实现基于 channel 的任务队列，可配置最大并发与重试，仅通过 rclone 接口执行上传。
+// Package worker implements a MySQL-leased upload worker pool.
 package worker
 
 import (
 	"context"
-	"path"
-	"path/filepath"
-	"strings"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/rand"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"rclone-sync-hub/internal/logger"
 	"rclone-sync-hub/internal/model"
+	"rclone-sync-hub/internal/observability"
 	"rclone-sync-hub/internal/rclone"
 	"rclone-sync-hub/internal/repository"
+	"rclone-sync-hub/internal/security"
 
 	"go.uber.org/zap"
 )
 
-// TaskMessage 入队消息：仅携带任务 ID，具体数据由 repository 查询。
-type TaskMessage struct {
-	TaskID uint
+// ProgressCallback is called after a throttled progress snapshot is persisted.
+type ProgressCallback func(taskID uint, percent float64, bytesDone, bytesTotal, speed int64, message string)
+type StatusCallback func(taskID uint, status, message string)
+
+// Config controls durable task claims and upload execution.
+type Config struct {
+	MaxConcurrent           int
+	MaxRetry                int
+	PollInterval            time.Duration
+	LeaseDuration           time.Duration
+	HeartbeatInterval       time.Duration
+	TaskTimeout             time.Duration
+	RetryBaseDelay          time.Duration
+	RetryMaxDelay           time.Duration
+	ProgressPersistInterval time.Duration
+	InstanceID              string
+	ResourcePolicy          *security.ResourcePolicy
+	Metrics                 *observability.Metrics
 }
 
-// ProgressCallback 进度回调，用于写 upload_logs 或推送前端。
-type ProgressCallback func(taskID uint, percent float64, bytesDone, bytesTotal, speed int64, message string)
+type taskLeaseRepository interface {
+	ClaimNext(ctx context.Context, owner string, leaseDuration time.Duration, maxAttempts int) (*model.UploadTask, error)
+	RenewLease(ctx context.Context, id uint, owner string, leaseDuration time.Duration) (bool, error)
+	UpdateProgress(ctx context.Context, id uint, owner string, percent float64, speed int64, at time.Time) error
+	FinishSuccess(ctx context.Context, id uint, owner string, fileRecordID uint, fingerprint, remoteName, remotePath string, finishedAt time.Time, durationSeconds int64) (bool, bool, error)
+	FinishCanceled(ctx context.Context, id uint, owner string, finishedAt time.Time, message string) (bool, error)
+	FailOrRetry(ctx context.Context, id uint, owner, message string, nextRetryAt time.Time, maxAttempts int) (string, error)
+	ReleaseLease(ctx context.Context, id uint, owner string) error
+	IsCancellationRequested(ctx context.Context, id uint) (bool, error)
+}
 
-// Queue 任务队列：从 channel 取任务，经 rclone 执行，更新 DB。
+type watchFolderStatsRepository interface {
+	RecordUploadSuccess(ctx context.Context, id uint, fileSize int64, at time.Time) error
+	RecordUploadFailure(ctx context.Context, id uint, at time.Time) error
+}
+
+// Queue keeps the historical name used by services; MySQL is now the source of truth.
+// Submit only wakes a worker, while workers atomically claim tasks from the database.
 type Queue interface {
-	// Submit 将任务 ID 放入队列，非阻塞。
 	Submit(ctx context.Context, taskID uint) error
-	// Run 启动 worker 池，阻塞直到 ctx 取消。
+	Cancel(ctx context.Context, taskID uint) error
 	Run(ctx context.Context)
 }
 
 type queue struct {
-	taskRepo         repository.TaskRepository
-	logRepo          repository.UploadLogRepository
-	fileRepo         repository.FileRecordRepository
-	watchFolderRepo  repository.WatchFolderRepository
-	rclone           rclone.Client
-	maxConcurrent    int
-	maxRetry         int
-	queueSize        int
-	ch               chan TaskMessage
-	wg               sync.WaitGroup
-	onProgress       ProgressCallback
+	taskRepo        taskLeaseRepository
+	logRepo         repository.UploadLogRepository
+	watchFolderRepo watchFolderStatsRepository
+	rclone          rclone.Client
+	cfg             Config
+	maxAttempts     int
+	wake            chan struct{}
+	active          sync.Map // task ID -> context.CancelFunc
+	wg              sync.WaitGroup
+	onProgress      ProgressCallback
+	onStatus        StatusCallback
 }
 
-// QueueOption 可选配置。
 type QueueOption func(*queue)
 
-// WithProgressCallback 设置进度回调（如写 upload_logs）。
 func WithProgressCallback(fn ProgressCallback) QueueOption {
-	return func(q *queue) {
-		q.onProgress = fn
-	}
+	return func(q *queue) { q.onProgress = fn }
 }
 
-// NewQueue 创建任务队列。上传时使用任务表 upload_tasks 的 remote_name、remote_path；完成后会更新 watch_folders 统计。
+func WithStatusCallback(fn StatusCallback) QueueOption {
+	return func(q *queue) { q.onStatus = fn }
+}
+
 func NewQueue(
-	taskRepo repository.TaskRepository,
+	taskRepo taskLeaseRepository,
 	logRepo repository.UploadLogRepository,
-	fileRepo repository.FileRecordRepository,
-	watchFolderRepo repository.WatchFolderRepository,
+	watchFolderRepo watchFolderStatsRepository,
 	rc rclone.Client,
-	maxConcurrent, maxRetry, queueSize int,
+	cfg Config,
 	opts ...QueueOption,
 ) Queue {
-	if queueSize <= 0 {
-		queueSize = 100
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = 3
 	}
+	if cfg.MaxRetry < 0 {
+		cfg.MaxRetry = 0
+	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = time.Second
+	}
+	if cfg.LeaseDuration <= 0 {
+		cfg.LeaseDuration = 90 * time.Second
+	}
+	if cfg.HeartbeatInterval <= 0 || cfg.HeartbeatInterval*2 >= cfg.LeaseDuration {
+		cfg.HeartbeatInterval = cfg.LeaseDuration / 3
+	}
+	if cfg.TaskTimeout <= 0 {
+		cfg.TaskTimeout = 4 * time.Hour
+	}
+	if cfg.RetryBaseDelay <= 0 {
+		cfg.RetryBaseDelay = 30 * time.Second
+	}
+	if cfg.RetryMaxDelay < cfg.RetryBaseDelay {
+		cfg.RetryMaxDelay = 30 * time.Minute
+	}
+	if cfg.ProgressPersistInterval <= 0 {
+		cfg.ProgressPersistInterval = 2 * time.Second
+	}
+	if cfg.InstanceID == "" {
+		cfg.InstanceID = generatedInstanceID()
+	}
+
 	q := &queue{
 		taskRepo:        taskRepo,
 		logRepo:         logRepo,
-		fileRepo:        fileRepo,
 		watchFolderRepo: watchFolderRepo,
 		rclone:          rc,
-		maxConcurrent:   maxConcurrent,
-		maxRetry:        maxRetry,
-		queueSize:       queueSize,
-		ch:              make(chan TaskMessage, queueSize),
+		cfg:             cfg,
+		maxAttempts:     cfg.MaxRetry + 1,
+		wake:            make(chan struct{}, cfg.MaxConcurrent),
 	}
-	for _, o := range opts {
-		o(q)
+	for _, option := range opts {
+		option(q)
 	}
 	return q
 }
 
-// Submit 将任务放入队列。
-func (q *queue) Submit(ctx context.Context, taskID uint) error {
+// Submit is intentionally non-blocking: the durable pending row already is the queue item.
+func (q *queue) Submit(ctx context.Context, _ uint) error {
 	select {
-	case q.ch <- TaskMessage{TaskID: taskID}:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
 	}
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
-// Run 启动 maxConcurrent 个 goroutine 消费队列。
+// Cancel immediately stops a task running in this process. The durable cancel flag is written by the service first.
+func (q *queue) Cancel(ctx context.Context, taskID uint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cancelValue, ok := q.active.Load(taskID); ok {
+		cancelValue.(context.CancelFunc)()
+	}
+	return q.Submit(ctx, taskID)
+}
+
 func (q *queue) Run(ctx context.Context) {
-	for i := 0; i < q.maxConcurrent; i++ {
+	logger.L.Info("worker_pool: start",
+		zap.String("instance_id", q.cfg.InstanceID),
+		zap.Int("max_concurrent", q.cfg.MaxConcurrent),
+		zap.Int("max_attempts", q.maxAttempts),
+		zap.Duration("lease_duration", q.cfg.LeaseDuration),
+	)
+	for workerID := 0; workerID < q.cfg.MaxConcurrent; workerID++ {
 		q.wg.Add(1)
-		go q.worker(ctx, i)
+		go q.worker(ctx, workerID)
 	}
 	q.wg.Wait()
+	logger.L.Info("worker_pool: stopped", zap.String("instance_id", q.cfg.InstanceID))
 }
 
-func (q *queue) worker(ctx context.Context, id int) {
+func (q *queue) worker(ctx context.Context, workerID int) {
 	defer q.wg.Done()
+	owner := fmt.Sprintf("%s/worker-%d", q.cfg.InstanceID, workerID)
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		task, err := q.taskRepo.ClaimNext(ctx, owner, q.cfg.LeaseDuration, q.maxAttempts)
+		if err != nil {
+			logger.L.Warn("worker: claim task failed", zap.String("owner", owner), zap.Error(err))
+			if !q.waitForWork(ctx) {
+				return
+			}
+			continue
+		}
+		if task == nil {
+			if !q.waitForWork(ctx) {
+				return
+			}
+			continue
+		}
+		q.processClaimed(ctx, owner, task)
+	}
+}
+
+func (q *queue) waitForWork(ctx context.Context) bool {
+	timer := time.NewTimer(q.cfg.PollInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-q.wake:
+		return true
+	case <-timer.C:
+		return true
+	}
+}
+
+func (q *queue) processClaimed(parentCtx context.Context, owner string, task *model.UploadTask) {
+	started := time.Now()
+	q.cfg.Metrics.WorkerStarted()
+	defer q.cfg.Metrics.WorkerReleased()
+	logger.L.Info("worker: task claimed",
+		zap.Uint("task_id", task.ID),
+		zap.String("owner", owner),
+		zap.Int("attempt", task.RetryCount),
+	)
+
+	if validationErr := validateClaimedTask(task); validationErr != nil {
+		q.finishFailure(parentCtx, owner, task, started, validationErr)
+		return
+	}
+	if q.cfg.ResourcePolicy != nil {
+		validatedLocalPath, validationErr := q.cfg.ResourcePolicy.ValidateLocalFile(task.FileRecord.LocalPath)
+		if validationErr != nil {
+			q.finishFailure(parentCtx, owner, task, started, validationErr)
+			return
+		}
+		validatedRemotePath, validationErr := q.cfg.ResourcePolicy.ValidateRemote(task.RemoteName, task.RemotePath)
+		if validationErr != nil {
+			q.finishFailure(parentCtx, owner, task, started, validationErr)
+			return
+		}
+		task.FileRecord.LocalPath = validatedLocalPath
+		task.RemotePath = validatedRemotePath
+	}
+	if task.FileFingerprint != "" {
+		info, err := os.Stat(task.FileRecord.LocalPath)
+		if err != nil {
+			q.finishFailure(parentCtx, owner, task, started, fmt.Errorf("stat local file: %w", err))
+			return
+		}
+		if current := fileMetadataFingerprint(info.Size(), info.ModTime()); current != task.FileFingerprint {
+			q.finishCanceled(owner, task.ID, "file version was superseded before upload", started)
+			return
+		}
+	}
+
+	taskCtx, cancelTask := context.WithTimeout(parentCtx, q.cfg.TaskTimeout)
+	q.active.Store(task.ID, context.CancelFunc(cancelTask))
+	defer q.active.Delete(task.ID)
+	var leaseLost atomic.Bool
+	heartbeatDone := make(chan struct{})
+	heartbeatStopped := make(chan struct{})
+	leaseDeadline := started.Add(q.cfg.LeaseDuration)
+	if task.LeaseExpiresAt != nil {
+		leaseDeadline = *task.LeaseExpiresAt
+	}
+	go func() {
+		defer close(heartbeatStopped)
+		q.heartbeat(taskCtx, cancelTask, heartbeatDone, owner, task.ID, leaseDeadline, &leaseLost)
+	}()
+
+	var progressMu sync.Mutex
+	var lastProgressAt time.Time
+	res, copyErr := q.rclone.Copy(taskCtx, task.FileRecord.LocalPath, task.RemoteName, task.RemotePath, func(progress rclone.Progress) {
+		now := time.Now()
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		hasProgress := progress.Percent > 0 || progress.BytesDone > 0 || progress.BytesTotal > 0 || progress.Speed > 0
+		if !hasProgress || now.Sub(lastProgressAt) < q.cfg.ProgressPersistInterval {
+			return
+		}
+		lastProgressAt = now
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := q.taskRepo.UpdateProgress(persistCtx, task.ID, owner, progress.Percent, progress.Speed, now); err != nil {
+			logger.L.Debug("worker: persist progress failed", zap.Uint("task_id", task.ID), zap.Error(err))
+			return
+		}
+		_ = q.logRepo.Create(&model.UploadLog{
+			TaskID:     task.ID,
+			Percent:    progress.Percent,
+			BytesDone:  progress.BytesDone,
+			BytesTotal: progress.BytesTotal,
+			Speed:      progress.Speed,
+			Message:    truncate(progress.Message, 2048),
+		})
+		if q.onProgress != nil {
+			q.onProgress(task.ID, progress.Percent, progress.BytesDone, progress.BytesTotal, progress.Speed, progress.Message)
+		}
+	})
+	taskContextErr := taskCtx.Err()
+	close(heartbeatDone)
+	cancelTask()
+	<-heartbeatStopped
+
+	finalizeCtx, finalizeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer finalizeCancel()
+	cancelRequested, cancelCheckErr := q.taskRepo.IsCancellationRequested(finalizeCtx, task.ID)
+	if cancelCheckErr != nil {
+		logger.L.Warn("worker: cancellation check failed", zap.Uint("task_id", task.ID), zap.Error(cancelCheckErr))
+	}
+	if cancelRequested {
+		q.finishCanceled(owner, task.ID, "task canceled by user", started)
+		return
+	}
+	if parentCtx.Err() != nil {
+		if err := q.taskRepo.ReleaseLease(finalizeCtx, task.ID, owner); err != nil {
+			logger.L.Warn("worker: release lease on shutdown failed", zap.Uint("task_id", task.ID), zap.Error(err))
+		}
+		q.cfg.Metrics.ObserveWorkerResult("released", time.Since(started))
+		return
+	}
+	if leaseLost.Load() {
+		logger.L.Warn("worker: lease lost; discard local result", zap.Uint("task_id", task.ID), zap.String("owner", owner))
+		q.cfg.Metrics.ObserveWorkerResult("lease_lost", time.Since(started))
+		return
+	}
+	if errors.Is(taskContextErr, context.DeadlineExceeded) {
+		copyErr = fmt.Errorf("upload exceeded task timeout %s", q.cfg.TaskTimeout)
+	}
+	if copyErr == nil && res.Success {
+		if fingerprintErr := verifyTaskFileFingerprint(task); fingerprintErr != nil {
+			q.finishCanceled(owner, task.ID, fingerprintErr.Error(), started)
+			return
+		}
+		q.finishSuccess(finalizeCtx, owner, task, started)
+		return
+	}
+	if copyErr == nil {
+		copyErr = errors.New(res.Error)
+	}
+	if res.Error != "" {
+		copyErr = fmt.Errorf("%w: %s", copyErr, res.Error)
+	}
+	q.finishFailure(finalizeCtx, owner, task, started, copyErr)
+}
+
+func (q *queue) heartbeat(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, owner string, taskID uint, leaseDeadline time.Time, leaseLost *atomic.Bool) {
+	ticker := time.NewTicker(q.cfg.HeartbeatInterval)
+	defer ticker.Stop()
+	consecutiveErrors := 0
+	attemptTimeout := minDuration(q.cfg.HeartbeatInterval, 5*time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-q.ch:
-			if !ok {
+		case <-done:
+			return
+		case <-ticker.C:
+			attemptStarted := time.Now()
+			heartbeatCtx, heartbeatCancel := context.WithTimeout(context.Background(), attemptTimeout)
+			active, err := q.taskRepo.RenewLease(heartbeatCtx, taskID, owner, q.cfg.LeaseDuration)
+			heartbeatCancel()
+			if err != nil {
+				consecutiveErrors++
+				logger.L.Warn("worker: lease heartbeat failed", zap.Uint("task_id", taskID), zap.Int("consecutive_errors", consecutiveErrors), zap.Error(err))
+				if renewalRetryWouldExceedLease(time.Now(), leaseDeadline, q.cfg.HeartbeatInterval, attemptTimeout) {
+					leaseLost.Store(true)
+					cancel()
+					return
+				}
+				continue
+			}
+			consecutiveErrors = 0
+			if !active {
+				leaseLost.Store(true)
+				cancel()
 				return
 			}
-			q.processOne(ctx, msg.TaskID, id)
+			leaseDeadline = attemptStarted.Add(q.cfg.LeaseDuration)
 		}
 	}
 }
 
-func (q *queue) processOne(ctx context.Context, taskID uint, workerID int) {
-	logger.L.Debug("worker: processOne start", zap.Uint("taskID", taskID), zap.Int("workerID", workerID))
-
-	task, err := q.taskRepo.GetByID(taskID)
-	if err != nil || task == nil {
-		logger.L.Error("worker: get task failed", zap.Uint("taskID", taskID), zap.Error(err))
-		return
+func renewalRetryWouldExceedLease(now, leaseDeadline time.Time, retryInterval, attemptTimeout time.Duration) bool {
+	if leaseDeadline.IsZero() {
+		return true
 	}
+	return !now.Add(retryInterval + attemptTimeout).Before(leaseDeadline)
+}
 
-	if task.Status != model.TaskStatusPending && task.Status != model.TaskStatusRunning {
-		logger.L.Debug("worker: skip task, status not pending/running",
-			zap.Uint("taskID", taskID),
-			zap.Int("workerID", workerID),
-			zap.String("status", task.Status),
-		)
-		return
-	}
-
-	if task.FileRecord == nil {
-		logger.L.Error("worker: task has no file record", zap.Uint("taskID", taskID))
-		return
-	}
-
-	// 若调度器已标记为 running，此处仅确保 DB 与内存一致
-	now := time.Now()
-	if task.Status == model.TaskStatusPending {
-		task.Status = model.TaskStatusRunning
-		task.StartedAt = &now
-		if err := q.taskRepo.Update(task); err != nil {
-			logger.L.Error("worker: update task running failed", zap.Uint("taskID", taskID), zap.Error(err))
-			return
-		}
-	} else if task.StartedAt == nil {
-		task.StartedAt = &now
-		_ = q.taskRepo.Update(task)
-	}
-
-	localPath := task.FileRecord.LocalPath
-	remoteName := task.RemoteName
-	remotePath := task.RemotePath
-	if remoteName == "" || remotePath == "" {
-		logger.L.Warn("worker: task missing remote_name or remote_path, use task table",
-			zap.Uint("taskID", taskID),
-			zap.String("remote_name", remoteName),
-			zap.String("remote_path", remotePath),
-		)
-	}
-
-	// 传给 rclone 的远程路径只取目录部分，去掉当前文件名，否则 rclone 会创建同名文件夹再上传到该文件夹内
-	remotePathForCopy := remotePath
-	if fileName := filepath.Base(localPath); fileName != "" {
-		rp := strings.TrimSuffix(remotePath, "/")
-		if rp == fileName || strings.HasSuffix(rp, "/"+fileName) {
-			dir := path.Dir(rp)
-			if dir == "." {
-				remotePathForCopy = ""
-			} else {
-				remotePathForCopy = dir
-			}
-		}
-	}
-
-	logger.L.Info("worker: start upload",
-		zap.Uint("taskID", taskID),
-		zap.Int("workerID", workerID),
-		zap.String("local_path", localPath),
-		zap.String("remote_name", remoteName),
-		zap.String("remote_path", remotePath),
-		zap.String("remote_path_for_copy", remotePathForCopy),
-	)
-
-	// 通过 rclone 接口执行，支持重试
-	var res rclone.Result
-	uploadStart := time.Now()
-	for attempt := 0; attempt <= q.maxRetry; attempt++ {
-		if attempt > 0 {
-			task.RetryCount = attempt
-			_ = q.taskRepo.Update(task)
-			sleepDur := time.Duration(attempt) * 2 * time.Second
-			logger.L.Debug("worker: retry after sleep",
-				zap.Uint("taskID", taskID),
-				zap.Int("attempt", attempt),
-				zap.Duration("sleep", sleepDur),
-			)
-			time.Sleep(sleepDur)
-		}
-
-		logger.L.Debug("worker: rclone copy attempt",
-			zap.Uint("taskID", taskID),
-			zap.Int("attempt", attempt),
-			zap.Int("max_retry", q.maxRetry),
-		)
-
-		// 进度节流：至少间隔 progressThrottle 才更新任务表，避免过于频繁写 DB
-		const progressThrottle = time.Second
-		var lastProgressAt time.Time
-
-		res, err = q.rclone.Copy(ctx, localPath, remoteName, remotePathForCopy, func(p rclone.Progress) {
-			now := time.Now()
-			// 每条输出都写入 upload_logs，不写 task 表
-			_ = q.logRepo.Create(&model.UploadLog{
-				TaskID:     taskID,
-				Percent:    p.Percent,
-				BytesDone:  p.BytesDone,
-				BytesTotal: p.BytesTotal,
-				Speed:      p.Speed,
-				Message:    p.Message,
-			})
-
-			// 有进度数据且距上次更新超过节流间隔时，仅更新任务进度字段（Progress/Speed/LastProgressAt），不更新 Log
-			hasProgress := p.Percent > 0 || p.BytesDone > 0 || p.BytesTotal > 0 || p.ETA != ""
-			if hasProgress && now.Sub(lastProgressAt) >= progressThrottle {
-				lastProgressAt = now
-				task.Progress = p.Percent
-				task.Speed = p.Speed
-				task.LastProgressAt = &now
-				if errUpd := q.taskRepo.Update(task); errUpd != nil {
-					logger.L.Debug("worker: progress update failed", zap.Uint("taskID", taskID), zap.Error(errUpd))
-				}
-				logger.L.Debug("worker: progress",
-					zap.Uint("taskID", taskID),
-					zap.Float64("percent", p.Percent),
-					zap.Int64("speed", p.Speed),
-					zap.String("eta", p.ETA),
-					zap.String("current", p.CurrentStr),
-					zap.String("total", p.TotalStr),
-				)
-			}
-
-			if q.onProgress != nil {
-				q.onProgress(taskID, p.Percent, p.BytesDone, p.BytesTotal, p.Speed, p.Message)
-			}
-		})
-
-		if err == nil && res.Success {
-			logger.L.Debug("worker: rclone copy ok", zap.Uint("taskID", taskID), zap.Int("attempt", attempt))
-			break
-		}
-
-		logger.L.Warn("worker: rclone copy attempt failed",
-			zap.Uint("taskID", taskID),
-			zap.Int("attempt", attempt),
-			zap.Int("max_retry", q.maxRetry),
-			zap.String("res_error", res.Error),
-			zap.Error(err),
-		)
-	}
-
-	// 更新任务状态与 file_record.uploaded_at；结果日志写入 upload_logs，不写 task 表
+func (q *queue) finishSuccess(ctx context.Context, owner string, task *model.UploadTask, started time.Time) {
 	finished := time.Now()
-	duration := finished.Sub(uploadStart)
-	task.FinishedAt = &finished
-	task.DurationSeconds = int64(duration.Seconds())
-
-	if err == nil && res.Success {
-		task.Status = model.TaskStatusSuccess
-		task.ErrorMsg = ""
-		task.FileRecord.UploadedAt = &finished
-		_ = q.fileRepo.Update(task.FileRecord)
-		_ = q.logRepo.Create(&model.UploadLog{TaskID: taskID, Message: "Rclone 命令执行成功"})
-		q.updateWatchFolderOnSuccess(task, finished)
-		logger.L.Info("worker: upload success",
-			zap.Uint("taskID", taskID),
-			zap.Int("workerID", workerID),
-			zap.String("local_path", localPath),
-			zap.Duration("duration", duration),
-		)
-	} else {
-		task.Status = model.TaskStatusFailed
-		if res.Error != "" {
-			task.ErrorMsg = res.Error
-		} else if err != nil {
-			task.ErrorMsg = err.Error()
-		}
-		_ = q.logRepo.Create(&model.UploadLog{TaskID: taskID, Message: "Rclone 命令执行失败: " + task.ErrorMsg})
-		q.updateWatchFolderOnFailure(task, finished)
-		logger.L.Warn("worker: upload failed",
-			zap.Uint("taskID", taskID),
-			zap.Int("workerID", workerID),
-			zap.String("local_path", localPath),
-			zap.Duration("duration", duration),
-			zap.String("error", task.ErrorMsg),
-		)
+	durationSeconds := int64(finished.Sub(started).Seconds())
+	expectedFingerprint := task.FileFingerprint
+	if expectedFingerprint == "" && task.FileRecord != nil {
+		expectedFingerprint = task.FileRecord.Fingerprint
 	}
-
-	if err := q.taskRepo.Update(task); err != nil {
-		logger.L.Error("worker: update task final state failed", zap.Uint("taskID", taskID), zap.Error(err))
+	transitioned, marked, err := q.taskRepo.FinishSuccess(ctx, task.ID, owner, task.FileRecordID, expectedFingerprint, task.RemoteName, task.RemotePath, finished, durationSeconds)
+	if err != nil || !transitioned {
+		logger.L.Warn("worker: finish success transition failed", zap.Uint("task_id", task.ID), zap.Bool("transitioned", transitioned), zap.Error(err))
 		return
 	}
-	logger.L.Debug("worker: processOne done", zap.Uint("taskID", taskID), zap.String("status", task.Status))
-}
-
-// updateWatchFolderOnSuccess 上传成功后更新 watch_folders：累计上传文件数、累计上传字节数、最近同步时间等。
-func (q *queue) updateWatchFolderOnSuccess(task *model.UploadTask, finished time.Time) {
-	if task.WatchFolderID == 0 {
-		return
+	if !marked {
+		logger.L.Info("worker: file version or destination changed; current snapshot remains pending", zap.Uint("task_id", task.ID))
 	}
-	wf, err := q.watchFolderRepo.GetByID(task.WatchFolderID)
-	if err != nil || wf == nil {
-		logger.L.Debug("worker: watch folder not found for success update", zap.Uint("watchFolderID", task.WatchFolderID), zap.Error(err))
-		return
-	}
+	_ = q.logRepo.Create(&model.UploadLog{TaskID: task.ID, Percent: 100, Message: "rclone upload succeeded"})
 	fileSize := task.FileSize
 	if fileSize <= 0 && task.FileRecord != nil {
 		fileSize = task.FileRecord.FileSize
 	}
-	wf.UploadedFileCount++
-	wf.UploadedBytes += fileSize
-	wf.LastSyncAt = &finished
-	wf.LastActiveAt = &finished
-	wf.WindowUploadedFiles++
-	wf.WindowUploadedBytes += fileSize
-	if err := q.watchFolderRepo.Update(wf); err != nil {
-		logger.L.Warn("worker: update watch_folder stats failed", zap.Uint("watchFolderID", wf.ID), zap.Error(err))
-		return
+	if task.WatchFolderID > 0 {
+		if err := q.watchFolderRepo.RecordUploadSuccess(ctx, task.WatchFolderID, fileSize, finished); err != nil {
+			logger.L.Warn("worker: update watch folder success stats failed", zap.Uint("task_id", task.ID), zap.Error(err))
+		}
 	}
-	logger.L.Debug("worker: watch_folder stats updated",
-		zap.Uint("watchFolderID", wf.ID),
-		zap.Int64("uploadedFileCount", wf.UploadedFileCount),
-		zap.Int64("uploadedBytes", wf.UploadedBytes),
-		zap.Int64("fileSize", fileSize),
-	)
+	logger.L.Info("worker: upload succeeded", zap.Uint("task_id", task.ID), zap.Duration("duration", finished.Sub(started)))
+	if q.onStatus != nil {
+		q.onStatus(task.ID, model.TaskStatusSuccess, "upload succeeded")
+	}
+	q.cfg.Metrics.ObserveWorkerResult(model.TaskStatusSuccess, finished.Sub(started))
 }
 
-// updateWatchFolderOnFailure 上传失败后更新 watch_folders：累计失败文件数、最近活动时间。
-func (q *queue) updateWatchFolderOnFailure(task *model.UploadTask, finished time.Time) {
-	if task.WatchFolderID == 0 {
+func (q *queue) finishCanceled(owner string, taskID uint, message string, started time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	transitioned, err := q.taskRepo.FinishCanceled(ctx, taskID, owner, time.Now(), message)
+	if err != nil || !transitioned {
+		logger.L.Warn("worker: finish canceled transition failed", zap.Uint("task_id", taskID), zap.Bool("transitioned", transitioned), zap.Error(err))
 		return
 	}
-	wf, err := q.watchFolderRepo.GetByID(task.WatchFolderID)
-	if err != nil || wf == nil {
+	_ = q.logRepo.Create(&model.UploadLog{TaskID: taskID, Message: message})
+	if q.onStatus != nil {
+		q.onStatus(taskID, model.TaskStatusCanceled, message)
+	}
+	q.cfg.Metrics.ObserveWorkerResult(model.TaskStatusCanceled, time.Since(started))
+}
+
+func (q *queue) finishFailure(ctx context.Context, owner string, task *model.UploadTask, started time.Time, failure error) {
+	if failure == nil {
+		failure = errors.New("unknown upload failure")
+	}
+	delay := q.retryDelay(task.RetryCount)
+	nextRetryAt := time.Now().Add(delay)
+	message := truncate(failure.Error(), 8192)
+	status, err := q.taskRepo.FailOrRetry(ctx, task.ID, owner, message, nextRetryAt, q.maxAttempts)
+	if err != nil {
+		logger.L.Warn("worker: failure transition failed", zap.Uint("task_id", task.ID), zap.Error(err))
 		return
 	}
-	wf.FailedFileCount++
-	wf.LastActiveAt = &finished
-	_ = q.watchFolderRepo.Update(wf)
+	_ = q.logRepo.Create(&model.UploadLog{TaskID: task.ID, Message: fmt.Sprintf("upload attempt %d failed (%s): %s", task.RetryCount, status, message)})
+	if q.onStatus != nil {
+		q.onStatus(task.ID, status, message)
+	}
+	if status == model.TaskStatusFailed && task.WatchFolderID > 0 {
+		_ = q.watchFolderRepo.RecordUploadFailure(ctx, task.WatchFolderID, time.Now())
+	}
+	logger.L.Warn("worker: upload attempt failed",
+		zap.Uint("task_id", task.ID),
+		zap.Int("attempt", task.RetryCount),
+		zap.String("next_status", status),
+		zap.Duration("elapsed", time.Since(started)),
+		zap.Error(failure),
+	)
+	if status == model.TaskStatusPending {
+		q.cfg.Metrics.RetryScheduled()
+		_ = q.Submit(ctx, task.ID)
+	}
+	q.cfg.Metrics.ObserveWorkerResult(status, time.Since(started))
+}
+
+func (q *queue) retryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := q.cfg.RetryBaseDelay
+	for i := 1; i < attempt && delay < q.cfg.RetryMaxDelay; i++ {
+		if delay > q.cfg.RetryMaxDelay/2 {
+			delay = q.cfg.RetryMaxDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay > q.cfg.RetryMaxDelay {
+		delay = q.cfg.RetryMaxDelay
+	}
+	// Add 0-20% jitter to avoid a retry stampede after a remote outage.
+	jitterLimit := int64(delay / 5)
+	if jitterLimit > 0 {
+		delay += time.Duration(rand.Int63n(jitterLimit + 1))
+	}
+	return delay
+}
+
+func validateClaimedTask(task *model.UploadTask) error {
+	if task.FileRecord == nil {
+		return errors.New("task has no file record")
+	}
+	if task.FileRecord.LocalPath == "" {
+		return errors.New("task local path is empty")
+	}
+	if task.RemoteName == "" {
+		return errors.New("task remote name is empty")
+	}
+	if task.RemotePath == "" {
+		return errors.New("task remote path is empty")
+	}
+	return nil
+}
+
+func fileMetadataFingerprint(size int64, modTime time.Time) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%d", size, modTime.UnixNano())))
+	return fmt.Sprintf("%x", sum)
+}
+
+func verifyTaskFileFingerprint(task *model.UploadTask) error {
+	if task == nil || task.FileRecord == nil || task.FileFingerprint == "" {
+		return nil
+	}
+	info, err := os.Stat(task.FileRecord.LocalPath)
+	if err != nil {
+		return fmt.Errorf("file became unavailable during upload; rescan required: %w", err)
+	}
+	if current := fileMetadataFingerprint(info.Size(), info.ModTime()); current != task.FileFingerprint {
+		return errors.New("file changed during upload; rescan required")
+	}
+	return nil
+}
+
+func generatedInstanceID() string {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown-host"
+	}
+	randomBytes := make([]byte, 6)
+	if _, err := cryptorand.Read(randomBytes); err != nil {
+		randomBytes = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
+	}
+	return fmt.Sprintf("%s-%d-%s", hostname, os.Getpid(), hex.EncodeToString(randomBytes))
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func truncate(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
 }

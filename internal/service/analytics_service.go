@@ -30,17 +30,18 @@ type DashboardData struct {
 
 // OverviewVO 概览。
 type OverviewVO struct {
-	TaskTotal         int64 `json:"task_total"`
-	TaskPending       int64 `json:"task_pending"`
-	TaskRunning       int64 `json:"task_running"`
-	TaskSuccess       int64 `json:"task_success"`
-	TaskFailed        int64 `json:"task_failed"`
-	TaskPaused        int64 `json:"task_paused"`
-	UploadedBytes     int64 `json:"uploaded_bytes_total"`
-	UploadedFiles     int64 `json:"uploaded_files_total"`
-	WatchFolderCount  int64 `json:"watch_folder_count"`
+	TaskTotal          int64 `json:"task_total"`
+	TaskPending        int64 `json:"task_pending"`
+	TaskRunning        int64 `json:"task_running"`
+	TaskSuccess        int64 `json:"task_success"`
+	TaskFailed         int64 `json:"task_failed"`
+	TaskPaused         int64 `json:"task_paused"`
+	TaskCanceled       int64 `json:"task_canceled"`
+	UploadedBytes      int64 `json:"uploaded_bytes_total"`
+	UploadedFiles      int64 `json:"uploaded_files_total"`
+	WatchFolderCount   int64 `json:"watch_folder_count"`
 	Recent24hCompleted int64 `json:"recent_24h_completed"`
-	Recent24hFailed   int64 `json:"recent_24h_failed"`
+	Recent24hFailed    int64 `json:"recent_24h_failed"`
 }
 
 // StatusItemVO 按状态一项（图表用）。
@@ -60,16 +61,17 @@ type WatchFolderItemVO struct {
 	PendingCount    int64  `json:"pending_count"`
 	RunningCount    int64  `json:"running_count"`
 	PausedCount     int64  `json:"paused_count"`
+	CanceledCount   int64  `json:"canceled_count"`
 	UploadedBytes   int64  `json:"uploaded_bytes"`
 	UploadedFiles   int64  `json:"uploaded_files"`
 }
 
 // TimeItemVO 按日一项（趋势图）。
 type TimeItemVO struct {
-	Date            string `json:"date"`
-	CompletedCount  int64  `json:"completed_count"`
-	FailedCount     int64  `json:"failed_count"`
-	UploadedBytes   int64  `json:"uploaded_bytes"`
+	Date           string `json:"date"`
+	CompletedCount int64  `json:"completed_count"`
+	FailedCount    int64  `json:"failed_count"`
+	UploadedBytes  int64  `json:"uploaded_bytes"`
 }
 
 // DashboardItemsVO 列表数据。
@@ -79,11 +81,12 @@ type DashboardItemsVO struct {
 }
 
 var statusLabels = map[string]string{
-	model.TaskStatusPending: "待上传",
+	model.TaskStatusPending:  "待上传",
 	model.TaskStatusRunning:  "上传中",
 	model.TaskStatusSuccess:  "上传完成",
 	model.TaskStatusFailed:   "上传失败",
 	model.TaskStatusPaused:   "已暂停",
+	model.TaskStatusCanceled: "已取消",
 }
 
 type analyticsService struct {
@@ -107,16 +110,17 @@ func (s *analyticsService) GetDashboard(ctx context.Context, days int) (Dashboar
 	}
 	out.Overview = OverviewVO{
 		TaskTotal:          overview.TaskTotal,
-		TaskPending:         overview.TaskPending,
-		TaskRunning:         overview.TaskRunning,
-		TaskSuccess:         overview.TaskSuccess,
-		TaskFailed:          overview.TaskFailed,
-		TaskPaused:          overview.TaskPaused,
-		UploadedBytes:       overview.UploadedBytes,
-		UploadedFiles:       overview.UploadedFiles,
-		WatchFolderCount:    overview.WatchFolderCount,
-		Recent24hCompleted:  overview.Recent24hDone,
-		Recent24hFailed:     overview.Recent24hFailed,
+		TaskPending:        overview.TaskPending,
+		TaskRunning:        overview.TaskRunning,
+		TaskSuccess:        overview.TaskSuccess,
+		TaskFailed:         overview.TaskFailed,
+		TaskPaused:         overview.TaskPaused,
+		TaskCanceled:       overview.TaskCanceled,
+		UploadedBytes:      overview.UploadedBytes,
+		UploadedFiles:      overview.UploadedFiles,
+		WatchFolderCount:   overview.WatchFolderCount,
+		Recent24hCompleted: overview.Recent24hDone,
+		Recent24hFailed:    overview.Recent24hFailed,
 	}
 
 	byStatus, err := s.repo.GroupTaskByStatus()
@@ -147,6 +151,7 @@ func (s *analyticsService) GetDashboard(ctx context.Context, days int) (Dashboar
 			PendingCount:    r.PendingCount,
 			RunningCount:    r.RunningCount,
 			PausedCount:     r.PausedCount,
+			CanceledCount:   r.CanceledCount,
 			UploadedBytes:   r.UploadedBytes,
 			UploadedFiles:   r.UploadedFiles,
 		})
@@ -166,8 +171,14 @@ func (s *analyticsService) GetDashboard(ctx context.Context, days int) (Dashboar
 		})
 	}
 
-	recent, _ := s.repo.RecentTasks(10)
-	failed, _ := s.repo.FailedTasks(20, nil)
+	recent, err := s.repo.RecentTasks(10)
+	if err != nil {
+		return out, err
+	}
+	failed, err := s.repo.FailedTasks(20, nil)
+	if err != nil {
+		return out, err
+	}
 	out.Items = DashboardItemsVO{RecentTasks: recent, FailedTasks: failed}
 	return out, nil
 }

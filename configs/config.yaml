@@ -5,28 +5,46 @@ server:
   mode: release          # debug / release
   embed_frontend: true   # 生产环境嵌入 Vue 静态资源
   enable_swagger: false  # 仅开发环境建议 true；生产必须 false
+  trusted_proxies: []    # 仅填写受信反向代理 IP/CIDR；空值忽略 X-Forwarded-For
 
 database:
   host: localhost   # 使用 docker-compose 时改为 mysql
   port: 3306
   user: app
-  password: apppassword
+  password: "" # 生产从 DB_PASSWORD 注入
   dbname: rclone_sync_hub
   charset: utf8mb4
   max_open_conns: 25
   max_idle_conns: 10
   conn_max_idle_time_mins: 10
+  conn_max_lifetime_mins: 30
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 30
+  write_timeout_seconds: 30
+  tls: "" # 跨主机连接建议 true；Compose 内部网络默认留空
 
 # 定时扫描（上传目标由任务表 upload_tasks 的 remote_name/remote_path 决定）
 scan:
-  local_path: /volumes    # 要扫描的本地目录（Docker 中可挂载）
-  enabled: true
-  interval_seconds: 300      # 扫描间隔（秒），用于本地目录与 watch_folders 扫描
+  interval_seconds: 300            # 监听目录未单独配置时的默认间隔
+  watch_poll_interval_seconds: 30  # 每 30 秒检查哪些目录已经到期
+  folder_timeout_seconds: 1800     # 单目录最长扫描 30 分钟，超时后可在下轮恢复
+  file_stable_seconds: 30          # 最近 30 秒仍在写入的文件暂不创建任务
+  max_concurrent_folders: 2        # 不同目录并行；同一目录仍串行遍历
+  batch_size: 500                  # 快照和任务批量写入，避免逐文件往返数据库
+  lease_seconds: 90                # 多实例下同一目录只允许一个扫描器持有租约
+  heartbeat_seconds: 30            # 进程崩溃后约一个租约周期内恢复
 
 worker:
   max_concurrent: 3   # 最大并发上传数
   max_retry: 3
-  queue_size: 1000
+  queue_size: 1000       # 已弃用，仅为兼容旧配置保留
+  poll_interval_milliseconds: 1000
+  lease_seconds: 90
+  heartbeat_seconds: 30
+  task_timeout_seconds: 14400
+  retry_base_seconds: 30
+  retry_max_seconds: 1800
+  progress_persist_seconds: 2
 
 rclone:
   bin_path: rclone
@@ -34,3 +52,24 @@ rclone:
 log:
   level: info   # debug / info / warn / error
   format: json  # json / console
+
+security:
+  enabled: true # 本地开发请使用 config.dev.yaml；release 模式禁止关闭
+  admin_username: admin
+  admin_password: "" # 生产从 AUTH_ADMIN_PASSWORD 注入，至少 12 字符
+  token_secret: ""   # 生产从 AUTH_TOKEN_SECRET 注入，至少 32 字符
+  token_ttl_minutes: 720
+  allowed_local_roots:
+    - /volumes
+  allowed_remotes: [] # 生产必须填写允许使用的 rclone remote 名称
+  max_request_body_bytes: 1048576
+  login_attempts_per_minute: 10
+  metrics_token: "" # 可选独立 Prometheus Bearer token，至少 32 字符
+
+maintenance:
+  interval_hours: 24
+  upload_log_retention_days: 30
+  task_retention_days: 365
+  scan_run_retention_days: 90
+  audit_log_retention_days: 180
+  delete_batch_size: 5000

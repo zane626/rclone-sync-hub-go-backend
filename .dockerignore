@@ -11,3 +11,8 @@ tmp
 *.exe
 .env
 .env.*
+coverage.out
+bin
+backups
+data
+mysql_data

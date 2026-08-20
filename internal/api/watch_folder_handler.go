@@ -23,14 +23,14 @@ func NewWatchFolderHandler(svc service.WatchFolderService) *WatchFolderHandler {
 
 // WatchFolderCreateReq 创建监听文件夹的请求体。
 type WatchFolderCreateReq struct {
-	Name                string `json:"name" binding:"required"`
-	LocalPath           string `json:"local_path" binding:"required"`
-	RemoteName          string `json:"remote_name" binding:"required"`
-	RemotePath          string `json:"remote_path" binding:"required"`
-	SyncType            string `json:"sync_type"`              // 可选，默认 local_to_remote
-	MaxDepth            int    `json:"max_depth"`              // 可选，0 表示不限制
-	FilterKeywords      string `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
-	ScanIntervalSecond  int    `json:"scan_interval_seconds"` // 可选，默认 300
+	Name               string `json:"name" binding:"required"`
+	LocalPath          string `json:"local_path" binding:"required"`
+	RemoteName         string `json:"remote_name" binding:"required"`
+	RemotePath         string `json:"remote_path" binding:"required"`
+	SyncType           string `json:"sync_type"`             // 可选，默认 local_to_remote
+	MaxDepth           int    `json:"max_depth"`             // 可选，0 表示不限制
+	FilterKeywords     string `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
+	ScanIntervalSecond int    `json:"scan_interval_seconds"` // 可选，默认 300
 }
 
 // WatchFolderUpdateReq 更新监听文件夹的请求体（全部可选）。
@@ -60,12 +60,14 @@ var _ = model.WatchFolder{}
 // @Param        body  body      WatchFolderCreateReq  true  "监听文件夹配置"
 // @Success      200   {object}  model.WatchFolder
 // @Failure      400   {object}  map[string]string
+// @Failure      409   {object}  map[string]string
 // @Failure      500   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/watch-folders [post]
 func (h *WatchFolderHandler) Create(c *gin.Context) {
 	var req WatchFolderCreateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	in := service.CreateWatchFolderInput{
@@ -80,7 +82,7 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 	}
 	f, err := h.svc.Create(c.Request.Context(), in)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, f)
@@ -97,15 +99,33 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 // @Param        page_size  query    int     false  "每页条数"           default(20)
 // @Success      200        {object} map[string]interface{}  "items 为列表，total 为总数"
 // @Failure      500        {object} map[string]string
+// @Security     BearerAuth
 // @Router       /api/watch-folders [get]
 func (h *WatchFolderHandler) List(c *gin.Context) {
 	status := c.DefaultQuery("status", "")
 	keyword := strings.TrimSpace(c.DefaultQuery("keyword", ""))
+	if len(keyword) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "keyword is too long", "code": "validation_error"})
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page <= 0 {
+		page = 1
+	}
+	if page > 10000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page is too large", "code": "validation_error"})
+		return
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
 	items, total, err := h.svc.List(c.Request.Context(), status, keyword, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -125,6 +145,7 @@ func (h *WatchFolderHandler) List(c *gin.Context) {
 // @Param        id   path      int  true  "监听文件夹 ID"
 // @Success      200  {object}  model.WatchFolder
 // @Failure      404  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/watch-folders/{id} [get]
 func (h *WatchFolderHandler) Get(c *gin.Context) {
 	idStr := c.Param("id")
@@ -135,7 +156,7 @@ func (h *WatchFolderHandler) Get(c *gin.Context) {
 	}
 	f, err := h.svc.Get(c.Request.Context(), uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, f)
@@ -150,7 +171,9 @@ func (h *WatchFolderHandler) Get(c *gin.Context) {
 // @Param        body  body      WatchFolderUpdateReq true  "更新内容（全部可选）"
 // @Success      200   {object}  model.WatchFolder
 // @Failure      400   {object}  map[string]string
+// @Failure      409   {object}  map[string]string
 // @Failure      500   {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/watch-folders/{id} [put]
 func (h *WatchFolderHandler) Update(c *gin.Context) {
 	idStr := c.Param("id")
@@ -161,7 +184,7 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 	}
 	var req WatchFolderUpdateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
 		return
 	}
 	in := service.UpdateWatchFolderInput{
@@ -178,7 +201,7 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 	}
 	f, err := h.svc.Update(c.Request.Context(), uint(id), in)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, f)
@@ -186,11 +209,15 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 
 // Delete 删除监听文件夹。
 // @Summary      删除监听文件夹
+// @Description  原子取消该目录的未完成任务并解除文件快照归属；活动扫描期间返回冲突
 // @Tags         watch-folders
 // @Produce      json
 // @Param        id   path      int  true  "监听文件夹 ID"
 // @Success      200  {object}  map[string]bool
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/watch-folders/{id} [delete]
 func (h *WatchFolderHandler) Delete(c *gin.Context) {
 	idStr := c.Param("id")
@@ -200,7 +227,7 @@ func (h *WatchFolderHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(c.Request.Context(), uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeAPIError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

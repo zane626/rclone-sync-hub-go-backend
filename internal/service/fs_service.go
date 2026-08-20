@@ -4,6 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+
+	"rclone-sync-hub/internal/apperror"
+	"rclone-sync-hub/internal/security"
 )
 
 // FSDir 表示本地文件系统中的一个目录。
@@ -19,11 +22,13 @@ type FSService interface {
 	ListSubDirs(ctx context.Context, root string) ([]FSDir, error)
 }
 
-type fsService struct{}
+type fsService struct {
+	policy *security.ResourcePolicy
+}
 
 // NewFSService 创建 FSService 实例。
-func NewFSService() FSService {
-	return &fsService{}
+func NewFSService(policy *security.ResourcePolicy) FSService {
+	return &fsService{policy: policy}
 }
 
 func (s *fsService) ListSubDirs(ctx context.Context, root string) ([]FSDir, error) {
@@ -33,13 +38,13 @@ func (s *fsService) ListSubDirs(ctx context.Context, root string) ([]FSDir, erro
 	default:
 	}
 
-	absRoot, err := filepath.Abs(root)
+	absRoot, err := s.policy.ValidateLocalDirectory(root)
 	if err != nil {
-		return nil, err
+		return nil, apperror.Validation("directory is invalid, inaccessible, or outside the allowlist", err)
 	}
 	entries, err := os.ReadDir(absRoot)
 	if err != nil {
-		return nil, err
+		return nil, apperror.Validation("directory cannot be read", err)
 	}
 	var dirs []FSDir
 	for _, entry := range entries {
@@ -50,6 +55,9 @@ func (s *fsService) ListSubDirs(ctx context.Context, root string) ([]FSDir, erro
 		}
 		if !entry.IsDir() {
 			continue
+		}
+		if len(dirs) >= 5000 {
+			return nil, apperror.Validation("directory contains too many subdirectories to list", nil)
 		}
 		name := entry.Name()
 		fullPath := filepath.Join(absRoot, name)
@@ -76,4 +84,3 @@ func hasSubDirs(path string) bool {
 	}
 	return false
 }
-

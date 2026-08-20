@@ -1,60 +1,184 @@
 name: rclone-sync-hub
 
+x-database-environment: &database-environment
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: rclone_sync_hub
+  MYSQL_USER: root
+  MYSQL_PASSWORD: "${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD}"
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   app:
-    image: zane626/rclone-sync-hub-go-backend
-    container_name: rclone-sync-hub-go-backend_container
+    image: "${APP_IMAGE:-rclone-sync-hub:local}"
+    build:
+      context: .
+      args:
+        VERSION: "${APP_VERSION:-dev}"
+        COMMIT: "${APP_COMMIT:-unknown}"
+        BUILD_DATE: "${APP_BUILD_DATE:-unknown}"
+    restart: unless-stopped
+    init: true
     ports:
-      - "8080:8080"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080"
     environment:
-      # 数据库（与下方 mysql 服务一致）
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_USER: app
-      DB_PASSWORD: apppassword
+      DB_PASSWORD: "${DB_APP_PASSWORD:?set DB_APP_PASSWORD}"
       DB_NAME: rclone_sync_hub
-      # 服务
+      DB_CONN_MAX_LIFETIME_MINS: "${DB_CONN_MAX_LIFETIME_MINS:-30}"
+      DB_CONNECT_TIMEOUT_SECONDS: "${DB_CONNECT_TIMEOUT_SECONDS:-10}"
+      DB_READ_TIMEOUT_SECONDS: "${DB_READ_TIMEOUT_SECONDS:-30}"
+      DB_WRITE_TIMEOUT_SECONDS: "${DB_WRITE_TIMEOUT_SECONDS:-30}"
+      DB_TLS: "${DB_TLS:-}"
       SERVER_PORT: "8080"
       SERVER_MODE: release
       EMBED_FRONTEND: "true"
-      ENABLE_SWAGGER: "true"
-      # 扫描（本地目录在容器内路径，需与 volumes 挂载一致）
-      SCAN_LOCAL_PATH: /volumes
-      SCAN_ENABLED: "false"
-      SCAN_INTERVAL_SECONDS: "300"
-      # Worker
-      WORKER_MAX_CONCURRENT: "3"
-      WORKER_MAX_RETRY: "3"
-      WORKER_QUEUE_SIZE: "1000"
-      # 日志
-      LOG_LEVEL: info
+      ENABLE_SWAGGER: "false"
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-}"
+      SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:-300}"
+      SCAN_WATCH_POLL_INTERVAL_SECONDS: "${SCAN_WATCH_POLL_INTERVAL_SECONDS:-30}"
+      SCAN_FOLDER_TIMEOUT_SECONDS: "${SCAN_FOLDER_TIMEOUT_SECONDS:-1800}"
+      SCAN_FILE_STABLE_SECONDS: "${SCAN_FILE_STABLE_SECONDS:-30}"
+      SCAN_MAX_CONCURRENT_FOLDERS: "${SCAN_MAX_CONCURRENT_FOLDERS:-2}"
+      SCAN_BATCH_SIZE: "${SCAN_BATCH_SIZE:-500}"
+      SCAN_LEASE_SECONDS: "${SCAN_LEASE_SECONDS:-90}"
+      SCAN_HEARTBEAT_SECONDS: "${SCAN_HEARTBEAT_SECONDS:-30}"
+      WORKER_MAX_CONCURRENT: "${WORKER_MAX_CONCURRENT:-3}"
+      WORKER_MAX_RETRY: "${WORKER_MAX_RETRY:-3}"
+      WORKER_POLL_INTERVAL_MILLISECONDS: "${WORKER_POLL_INTERVAL_MILLISECONDS:-1000}"
+      WORKER_LEASE_SECONDS: "${WORKER_LEASE_SECONDS:-90}"
+      WORKER_HEARTBEAT_SECONDS: "${WORKER_HEARTBEAT_SECONDS:-30}"
+      WORKER_TASK_TIMEOUT_SECONDS: "${WORKER_TASK_TIMEOUT_SECONDS:-14400}"
+      WORKER_RETRY_BASE_SECONDS: "${WORKER_RETRY_BASE_SECONDS:-30}"
+      WORKER_RETRY_MAX_SECONDS: "${WORKER_RETRY_MAX_SECONDS:-1800}"
+      WORKER_PROGRESS_PERSIST_SECONDS: "${WORKER_PROGRESS_PERSIST_SECONDS:-2}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
       LOG_FORMAT: json
+      AUTH_ENABLED: "true"
+      AUTH_ADMIN_USERNAME: "${AUTH_ADMIN_USERNAME:-admin}"
+      AUTH_ADMIN_PASSWORD: "${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD (at least 12 characters)}"
+      AUTH_VIEWER_USERNAME: "${AUTH_VIEWER_USERNAME:-}"
+      AUTH_VIEWER_PASSWORD: "${AUTH_VIEWER_PASSWORD:-}"
+      AUTH_TOKEN_SECRET: "${AUTH_TOKEN_SECRET:?set AUTH_TOKEN_SECRET (at least 32 characters)}"
+      AUTH_TOKEN_TTL_MINUTES: "${AUTH_TOKEN_TTL_MINUTES:-720}"
+      ALLOWED_LOCAL_ROOTS: /volumes
+      ALLOWED_RCLONE_REMOTES: "${ALLOWED_RCLONE_REMOTES:?set comma-separated allowed rclone remotes}"
+      MAX_REQUEST_BODY_BYTES: "${MAX_REQUEST_BODY_BYTES:-1048576}"
+      LOGIN_ATTEMPTS_PER_MINUTE: "${LOGIN_ATTEMPTS_PER_MINUTE:-10}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN:-}"
+      MAINTENANCE_INTERVAL_HOURS: "${MAINTENANCE_INTERVAL_HOURS:-24}"
+      UPLOAD_LOG_RETENTION_DAYS: "${UPLOAD_LOG_RETENTION_DAYS:-30}"
+      TASK_RETENTION_DAYS: "${TASK_RETENTION_DAYS:-365}"
+      SCAN_RUN_RETENTION_DAYS: "${SCAN_RUN_RETENTION_DAYS:-90}"
+      AUDIT_LOG_RETENTION_DAYS: "${AUDIT_LOG_RETENTION_DAYS:-180}"
+      MAINTENANCE_DELETE_BATCH_SIZE: "${MAINTENANCE_DELETE_BATCH_SIZE:-5000}"
+      RCLONE_CONFIG: /config/rclone/rclone.conf
     volumes:
-      # 本地目录需要挂载到 /volumes
-      - ./data/local:/volumes:ro
-      - ./rclone:/root/.config/rclone:ro
+      - type: bind
+        source: "${LOCAL_DATA_DIR:-./data/local}"
+        target: /volumes
+        read_only: true
+      - type: bind
+        source: "${RCLONE_CONFIG_DIR:-./rclone}"
+        target: /config/rclone
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: "${APP_MEMORY_LIMIT:-1g}"
+    cpus: "${APP_CPUS:-2.0}"
+    logging: *default-logging
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       mysql:
         condition: service_healthy
 
   mysql:
-    image: mysql:8.0
-    container_name: rclone-sync-hub-go-mysql_container
+    image: mysql:8.4
+    restart: unless-stopped
     command:
-      - --default-authentication-plugin=caching_sha2_password
       - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_general_ci
-      - --explicit_defaults_for_timestamp=true
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --explicit-defaults-for-timestamp=true
       - --bind-address=0.0.0.0
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-expire-logs-seconds=604800
+      - --sync-binlog=1
+      - --innodb-flush-log-at-trx-commit=1
+      - --slow-query-log=ON
+      - --slow-query-log-file=/var/lib/mysql/slow.log
+      - --long-query-time=2
+      - --max-connections=100
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD}"
+      MYSQL_ROOT_HOST: "%"
       MYSQL_DATABASE: rclone_sync_hub
       MYSQL_USER: app
-      MYSQL_PASSWORD: apppassword
+      MYSQL_PASSWORD: "${DB_APP_PASSWORD:?set DB_APP_PASSWORD}"
     volumes:
-      - ./mysql_data:/var/lib/mysql
+      - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
-      interval: 3s
-      retries: 5
+      interval: 5s
+      timeout: 5s
+      retries: 12
       start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 512
+    mem_limit: "${MYSQL_MEMORY_LIMIT:-2g}"
+    cpus: "${MYSQL_CPUS:-2.0}"
+    logging: *default-logging
+
+  backup:
+    image: mysql:8.4
+    profiles: ["operations"]
+    environment:
+      <<: *database-environment
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-14}"
+    volumes:
+      - ./scripts:/scripts:ro
+      - "${BACKUP_DIR:-./backups}:/backups"
+    entrypoint: ["/bin/sh", "/scripts/backup-mysql.sh"]
+    logging: *default-logging
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  restore:
+    image: mysql:8.4
+    profiles: ["operations"]
+    environment:
+      <<: *database-environment
+      BACKUP_DIR: /backups
+      RESTORE_FILE: "${RESTORE_FILE:-}"
+      ALLOW_RESTORE: "${ALLOW_RESTORE:-NO}"
+    volumes:
+      - ./scripts:/scripts:ro
+      - "${BACKUP_DIR:-./backups}:/backups:ro"
+    entrypoint: ["/bin/sh", "/scripts/restore-mysql.sh"]
+    logging: *default-logging
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

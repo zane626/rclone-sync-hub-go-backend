@@ -1,247 +1,155 @@
-# Rclone Sync Hub（Go 后端）
+# Rclone Sync Hub
 
-文件上传调度系统：定时扫描本地目录与监听文件夹、判断是否已上传、入队、控制并发、调用 rclone 上传、解析进度、更新数据库，并提供 REST API 与 Vue3 管理界面。生产环境可嵌入前端构建产物，单二进制部署。
+面向生产环境的本地文件扫描与 rclone 上传调度服务。系统扫描多个监听目录，把新文件或发生变化的文件持久化为上传任务，通过 MySQL 租约安全地并发执行，并提供 Vue 3 管理界面、审计、指标和运维工具。
 
----
+## 已实现功能
 
-## 功能概览
+| 模块 | 功能 |
+|---|---|
+| 监听目录 | 多目录配置、独立扫描周期、深度和关键字过滤、启停、立即扫描 |
+| 增量扫描 | 文件大小 + 纳秒 mtime 指纹、稳定窗口、快照批量写入、变更版本重新建单、删除文件标记 |
+| 扫描可靠性 | `next_scan_at` 调度、目录超时、失败自动恢复、扫描历史、目录级并行、分布式租约和心跳 |
+| 上传队列 | MySQL 持久化队列、`FOR UPDATE SKIP LOCKED` 领取、优先级、租约续期、进程崩溃恢复 |
+| 失败处理 | 指数退避 + 抖动、最大次数、任务超时、暂停、取消、单个与批量重试 |
+| rclone | 精确文件目标 `copyto`、结构化进度、输出限长、remote 白名单、配置列表脱敏 |
+| 一致性 | 幂等键防重；任务成功与文件版本上传标记在同一数据库事务中提交 |
+| 权限安全 | HMAC Bearer 登录、bcrypt 密码、admin/viewer 角色、登录限流、请求体限制、安全响应头 |
+| 资源边界 | 本地根目录和 rclone remote 白名单、符号链接解析、路径穿越防护、变更操作审计 |
+| 可观测性 | JSON 日志、请求 ID、liveness/readiness、Prometheus 指标、扫描逾期/队列积压告警、扫描历史、审计日志、SSE 进度 |
+| 数据治理 | 版本化迁移、迁移锁和 dirty 检测、日志/终态任务/扫描/审计数据分批保留清理 |
+| 交付运维 | 非 root 只读镜像、Compose 安全基线、CI 测试/漏洞门禁、多架构镜像、SBOM/来源证明 |
+| 灾备 | MySQL 全量备份、SHA-256 校验、恢复保护开关、binlog/PITR 基线、systemd 定时器示例 |
 
-| 功能 | 说明 |
-|------|------|
-| **监听文件夹（Watch Folders）** | 管理多个本地目录，每个目录可配置远程名称、远程路径、是否启用；定时扫描未上传文件并入队 |
-| **任务调度** | 任务状态：pending → running → success / failed；Worker 池 + rclone 执行上传，进度与日志写入 `upload_logs` |
-| **任务 CRUD** | 列表、详情、创建、重试、暂停、删除；支持批量重试、批量暂停、批量删除 |
-| **任务日志** | 按任务 ID 查询上传进度日志（`GET /api/tasks/:id/logs`） |
-| **数据分析** | 仪表盘接口：按状态/文件夹/时间聚合统计、任务列表（`GET /api/analytics/dashboard`） |
-| **本地目录浏览** | 列出指定路径下的子目录（`GET /api/fs/subdirs`），便于前端选择扫描路径 |
-| **rclone 配置** | 列出 rclone 已有远程配置名称（`GET /api/rclone/configs`） |
-| **健康检查** | `GET /api/health` |
-| **Swagger 文档** | 开发环境下可开启 `/swagger/index.html` |
-| **前端嵌入** | Vue3 + Naive UI；History 模式；未匹配路径回退 `index.html`（SPA fallback） |
+## 为什么长时间运行后不会停止扫描
 
----
+扫描是否到期由数据库中的 `next_scan_at` 决定，不依赖一次性内存定时器。无论成功、目录暂时不可用、超时还是进程退出，扫描状态都会被终结或由过期租约恢复。`error` 状态不会被永久排除；多实例同时运行时，同一目录也只会被一个扫描器领取。
+
+扫描热路径不再对每个文件查询数据库或调用一次 rclone。每轮先批量读取快照和未完成任务，再遍历文件系统；首次发现以及后续批量变化的快照和任务都按批写入。不同目录可以受控并行，同一目录仍顺序遍历，避免磁盘随机 I/O 失控。
+
+“立即扫描”只会把全部启用目录持久化为到期状态并唤醒扫描器，接口立即返回 `202 Accepted`，不会让 HTTP 请求等待完整文件遍历。实际结果和耗时通过扫描历史查看。
+
+默认指纹使用文件大小和纳秒 mtime，不读取完整文件内容。这是扫描性能与强内容校验之间的明确取舍：如果外部程序可能在保持大小和 mtime 完全不变的情况下修改内容，应在业务流程中保留不可变落盘约束，或另行安排低频 checksum 校验，而不要把全量哈希放进高频扫描。
 
 ## 技术栈
 
-- **Go 1.22+**，Gin，Gorm，**MySQL 8.0+**，zap，YAML 配置
-- **前端**：Vue3、Naive UI
-- 分层架构：api / service / repository / database / scheduler / worker / rclone / model / config / logger
-- 接口解耦、依赖注入、无循环依赖；repository 为接口，可后期切换数据库实现
+- Go 1.25 语言基线，生产构建工具链 Go 1.26.7
+- Gin、GORM、MySQL 8.4、zap、Prometheus client
+- Vue 3、Vue Router、Naive UI、Vite 8、pnpm
+- rclone 1.75.0
+- Docker/Compose、GitHub Actions
 
----
+详细依赖关系和状态机见 [ARCHITECTURE.md](ARCHITECTURE.md)，上线、备份、恢复和告警流程见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
-## 目录结构
+## 快速开始
 
-```
-cmd/server/              # 入口：main.go，embed frontend/dist
-internal/
-  api/                   # HTTP 层：路由与 handler，/api 前缀
-  service/               # 业务编排：调用 repository、worker、scheduler
-  repository/            # 数据访问接口与实现（每实体单独文件），仅此处依赖 Gorm
-  database/              # 数据库连接与迁移（MySQL driver、连接池、AutoMigrate）
-  scheduler/             # 定时扫描本地目录与 watch_folders，未上传文件入队
-  worker/                # 任务队列：channel、最大并发、重试，仅通过 rclone 接口
-  rclone/                # rclone 封装：唯一使用 exec 的模块，解析 --progress
-  model/                 # 领域模型与表结构（task、file_record、upload_log、watch_folder）
-  config/                # 配置加载（yaml + 环境变量）
-  logger/                # zap 封装
-frontend/                # Vue3 项目（单独开发，npm run build → frontend/dist）
-cmd/server/frontend/dist/ # Vue 构建产物供 go:embed（Docker 多阶段会注入）
-configs/                 # 配置文件（config.yaml、config.dev.yaml）
+### 生产方式：Docker Compose
+
+1. 复制 `.env.example` 为 `.env`，替换所有占位密码。管理员密码至少 12 字符，签名密钥和监控令牌至少 32 字符。
+2. 在 `RCLONE_CONFIG_DIR` 下放置 `rclone.conf`；把待上传数据放在或挂载到 `LOCAL_DATA_DIR`。源数据挂载为只读；OAuth remote 的配置目录需允许容器 UID 10001 写回刷新后的 token。
+3. `ALLOWED_RCLONE_REMOTES` 只填写允许使用的 remote 名称，多个名称用逗号分隔。
+4. 校验并启动：
+
+使用默认路径的 Linux 主机可执行 `chown -R 10001:10001 ./rclone && chmod 700 ./rclone`；自定义路径时先确认目标再调整命令。
+
+```sh
+docker compose config
+docker compose up -d --build
+docker compose ps
 ```
 
----
+默认只绑定 `127.0.0.1:8080`。公网访问必须通过 TLS 反向代理；示例位于 `deploy/nginx/rclone-sync-hub.conf.example`。
 
-## 数据库（MySQL）
+健康检查：
 
-- 使用 **Gorm + MySQL driver**，连接与迁移封装在 `internal/database`；**repository 保持接口**，便于后期切换。
-- 表结构由 **AutoMigrate** 在启动时自动迁移，无需手跑 SQL。
-- **表**：
-  - **upload_tasks**：任务（status: pending / running / success / failed，含 progress、retry_count、error_message、remote_name、remote_path 等）
-  - **file_records**：文件路径、大小、是否已上传（用于去重）
-  - **upload_logs**：上传进度日志
-  - **watch_folders**：监听文件夹配置（本地路径、远程名称、远程路径、启用状态、最后扫描/同步时间等）
+- `GET /api/health/live`：进程存活，不依赖数据库
+- `GET /api/health/ready`：数据库可用，可接收业务流量
 
----
+### 本地开发
 
-## 配置说明
+需要 Go、Node 24、pnpm、rclone 和 MySQL 8.4。
 
-### YAML 配置文件
-
-主配置见 `configs/config.yaml`，包含：
-
-- **server**：port、mode（debug/release）、embed_frontend、enable_swagger
-- **database**：host、port、user、password、dbname、charset、max_open_conns、max_idle_conns、conn_max_idle_time_mins
-- **scan**：local_path（要扫描的本地根目录）、enabled、interval_seconds（用于全局扫描与 watch_folders 定时扫描）
-- **worker**：max_concurrent、max_retry、queue_size
-- **rclone**：bin_path（默认 `rclone`）
-- **log**：level（debug/info/warn/error）、format（json/console）
-
-使用 docker-compose 时请将 `database.host` 改为 `mysql`。
-
-### 环境变量（无配置文件时）
-
-**不提供配置文件**时（如 Docker 仅用 environment），可从环境变量加载全部配置：
-
-| 类别 | 环境变量示例 |
-|------|------------------|
-| 数据库 | DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_CHARSET, DB_MAX_OPEN_CONNS, DB_MAX_IDLE_CONNS, DB_CONN_MAX_IDLE_TIME_MINS |
-| 服务 | SERVER_PORT, SERVER_MODE, EMBED_FRONTEND, ENABLE_SWAGGER |
-| 扫描 | SCAN_LOCAL_PATH, SCAN_ENABLED, SCAN_INTERVAL_SECONDS |
-| Worker | WORKER_MAX_CONCURRENT, WORKER_MAX_RETRY, WORKER_QUEUE_SIZE |
-| 其它 | RCLONE_BIN_PATH, LOG_LEVEL, LOG_FORMAT |
-
-布尔值可用 `true`/`false`、`1`/`0`。详见 `internal/config/config.go` 中的 `applyEnvOverrides`。
-
----
-
-## 运行方式
-
-### 1. 本地直接运行
-
-1. 安装 **Go 1.22+**、**MySQL 8.0+**、**rclone**。
-2. 创建数据库：
-   ```bash
-   CREATE DATABASE rclone_sync_hub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   ```
-3. 复制并修改配置：
-   ```bash
-   cp configs/config.yaml configs/my.yaml
-   # 编辑 database（host/port/user/password/dbname）、scan.local_path、scan.remote_name 等
-   ```
-4. 启动（自动执行 AutoMigrate）：
-   ```bash
-   go mod tidy
-   CONFIG_PATH=configs/my.yaml go run ./cmd/server
-   # 或默认读取 configs/config.yaml：go run ./cmd/server
-   ```
-5. 访问：API 基地址 `http://localhost:8080/api`，前端（若嵌入）`http://localhost:8080/`。
-
-### 2. 本地开发（热重载）
-
-适合日常开发：只起 MySQL，本机用 Fresh 跑 Go，改代码自动重启，默认使用 `configs/config.dev.yaml`（localhost MySQL + 开 Swagger + debug 日志）。
-
-**安装 Fresh（仅需一次）**
-
-```bash
-go install github.com/zzwx/fresh@latest
+```sh
+docker compose -f docker-compose.dev.yml up -d
+make frontend-install
+CONFIG_PATH=configs/config.dev.yaml go run ./cmd/server
 ```
 
-**启动 MySQL**
+另开终端启动前端开发服务器：
 
-```bash
-make dev-mysql
-# 或：docker compose up mysql -d
+```sh
+pnpm --dir frontend dev
 ```
 
-**启动热重载**
+浏览器访问 `http://127.0.0.1:5173`。开发配置不嵌入占位静态页；Vite 通过 `VITE_API_PROXY_TARGET` 代理 API，默认目标是 `http://127.0.0.1:8080`。生产镜像会在多阶段构建中把真实前端产物注入 Go 二进制。
 
-- **Linux / Mac / Git Bash**：`make dev` 或 `CONFIG_PATH=configs/config.dev.yaml fresh`
-- **PowerShell**：`.\dev.ps1` 或 `$env:CONFIG_PATH="configs/config.dev.yaml"; fresh`
-- **CMD**：`set CONFIG_PATH=configs\config.dev.yaml && fresh`
+## 核心配置
 
-**访问**
+配置优先级为环境变量覆盖 YAML。生产 Compose 会强制要求数据库密码、管理员密码、签名密钥和 remote 白名单。
 
-- API：http://localhost:8080/api
-- Swagger：http://localhost:8080/swagger/index.html
+| 类别 | 关键配置 |
+|---|---|
+| 扫描 | `SCAN_INTERVAL_SECONDS`、`SCAN_FOLDER_TIMEOUT_SECONDS`、`SCAN_FILE_STABLE_SECONDS` |
+| 扫描性能 | `SCAN_MAX_CONCURRENT_FOLDERS`、`SCAN_BATCH_SIZE` |
+| 扫描恢复 | `SCAN_LEASE_SECONDS`、`SCAN_HEARTBEAT_SECONDS` |
+| Worker | `WORKER_MAX_CONCURRENT`、`WORKER_TASK_TIMEOUT_SECONDS`、重试与租约参数 |
+| 数据库 | 连接池、连接寿命、connect/read/write timeout、可选 `DB_TLS` |
+| 安全 | `AUTH_*`、`ALLOWED_LOCAL_ROOTS`、`ALLOWED_RCLONE_REMOTES`、`TRUSTED_PROXIES` |
+| 运维 | `METRICS_BEARER_TOKEN`、保留天数、`BACKUP_DIR`、资源上限 |
 
-热重载行为由项目根目录 **`.fresh.yaml`** 控制（main_path、监听扩展名、排除目录等）。
+错误的布尔值或数值环境变量、YAML 未知字段，以及不可读取的已配置文件都会让程序启动失败，不会静默退回默认值。
 
-### 3. Docker 构建与运行
+## 主要 API
 
-**构建镜像**
+公开接口：
 
-```bash
-docker build -t rclone-sync-hub .
+- `GET /api/health/live`
+- `GET /api/health/ready`
+- `GET /api/auth/config`
+- `POST /api/auth/login`
+
+登录后可用：
+
+- 任务：`/api/tasks`、`/api/tasks/:id/logs`、`/api/stats`
+- 分析：`/api/analytics/dashboard`
+- 监听目录：`/api/watch-folders`
+- 扫描历史：`/api/scan-runs`
+- 实时事件：`/api/events`
+- rclone remote：`/api/rclone/configs`
+
+管理员写接口包括任务创建/重试/暂停/取消/删除、批量操作、异步立即扫描（`POST /api/scan`）、监听目录管理和审计日志。`/metrics` 使用独立监控 Bearer token；未配置时要求管理员 token。Swagger 只建议在开发环境开启。
+
+## 验证与发布门禁
+
+```sh
+go test ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+pnpm --dir frontend audit --prod --audit-level=high --registry=https://registry.npmjs.org
+pnpm --dir frontend build
+docker compose --env-file .env.example config --quiet
 ```
 
-多阶段：Node 构建 Vue → Go 构建二进制（含 swag 生成文档）→ 最终镜像 alpine + 安装 rclone。Vue 构建产物会复制到 `cmd/server/frontend/dist` 供 `go:embed` 使用。
+CI 还会运行 Go race detector、真实 MySQL 事务/幂等集成测试以及生产镜像构建。Tag `v*` 只有在验证通过后才发布 amd64/arm64 镜像，并生成 SBOM 与构建来源证明。
 
-**使用 docker-compose（推荐）**
+## 备份与恢复
 
-- 项目名：`rclone-sync-hub`。
-- 不挂载配置文件时，**全部通过 environment 配置**（见 `docker-compose.yml`）。
-- 需挂载：本地待上传目录（如 `./data/local:/volumes:ro`）、rclone 配置目录（如 `~/.config/rclone:/root/.config/rclone:ro`）。
-
-```bash
-docker compose up -d
+```sh
+docker compose --profile operations run --rm backup
 ```
 
-- 应用依赖 MySQL 健康后再启动。
-- 生产环境请将 `ENABLE_SWAGGER` 设为 `false`。
+恢复会覆盖目标数据库，必须先停应用并显式设置 `ALLOW_RESTORE=YES`：
 
----
-
-## API 列表
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | /api/health | 健康检查 |
-| GET | /api/analytics/dashboard | 数据分析仪表盘（概览、按状态/文件夹/时间、列表） |
-| GET | /api/stats | 各状态任务数量（pending/running/success/failed） |
-| GET | /api/tasks | 任务列表（可选 status、page、page_size） |
-| GET | /api/tasks/:id | 任务详情 |
-| GET | /api/tasks/:id/logs | 任务上传进度日志 |
-| POST | /api/tasks | 创建任务 |
-| POST | /api/tasks/:id/retry | 重试任务（重新入队） |
-| POST | /api/tasks/:id/pause | 暂停任务 |
-| DELETE | /api/tasks/:id | 删除任务 |
-| POST | /api/tasks/batch/retry | 批量重试 |
-| POST | /api/tasks/batch/pause | 批量暂停 |
-| POST | /api/tasks/batch/delete | 批量删除 |
-| POST | /api/scan | 触发一次目录扫描 |
-| GET | /api/rclone/configs | 列出 rclone 远程配置名称 |
-| POST | /api/watch-folders | 创建监听文件夹 |
-| GET | /api/watch-folders | 监听文件夹列表 |
-| GET | /api/watch-folders/:id | 监听文件夹详情 |
-| PUT | /api/watch-folders/:id | 更新监听文件夹 |
-| DELETE | /api/watch-folders/:id | 删除监听文件夹 |
-| GET | /api/fs/subdirs | 列出指定路径下的子目录（query: path） |
-
----
-
-## Swagger 接口文档
-
-- 使用 **swaggo/swag** 生成 OpenAPI，**gin-swagger** 提供 UI；注解写在 api 层。
-- 访问：**`/swagger/index.html`**（仅当 `server.enable_swagger` 为 true 时生效）。
-- **生产环境必须设为 false**。
-
-**生成文档**
-
-```bash
-go install github.com/swaggo/swag/cmd/swag@latest
-swag init -g cmd/server/main.go -o cmd/server/docs --parseDependency --parseInternal
+```sh
+docker compose stop app
+RESTORE_FILE=/backups/rclone_sync_hub_YYYYMMDDTHHMMSSZ.sql.gz ALLOW_RESTORE=YES docker compose --profile operations run --rm restore
+docker compose up -d app
 ```
 
-或使用 Makefile：`make swagger`（安装 swag + 生成）、`make swagger-only`（仅生成）。
+本机备份目录不是异地灾备。必须把备份和需要的 binlog 复制到独立存储，并定期在隔离环境做恢复演练。
 
-Docker 构建时已包含「安装 swag → swag init → go build」，镜像内带最新文档；是否暴露 UI 仍由运行时配置决定。
+## 当前边界
 
----
-
-## 前端（Vue3）
-
-- **技术**：Vue3、Naive UI、Vue Router（History 模式）。
-- **嵌入**：使用 `go:embed` 嵌入 `cmd/server/frontend/dist/*`。访问 `/` 返回 `index.html`；未匹配路径回退到 `index.html`（SPA fallback）。API 统一 `/api` 前缀。
-- **配置**：`server.embed_frontend: true` 时提供静态资源与 fallback；为 false 时仅提供 API，可单独起前端 dev server 联调。
-
-**开发与构建**
-
-- 在 `frontend/` 开发：`npm install`、`npm run dev`、`npm run build`（输出到 `frontend/dist`）。
-- 单二进制部署：将 `frontend/dist` 复制到 `cmd/server/frontend/dist` 后 `go build ./cmd/server`，或直接使用 Docker 多阶段构建。
-
----
-
-## Worker 与 rclone
-
-- **Worker**：基于 channel 的任务队列，可配置最大并发与重试，使用 context 取消；**不直接调用 exec**，仅通过 **rclone 模块接口** 执行上传。
-- **rclone 模块**：封装 `exec.Command`，支持 `--progress`，解析标准输出并返回结构化进度；项目内其它模块不得直接使用 exec。
-
----
-
-## 保证与约定
-
-- 可直接运行：`go mod tidy && go run ./cmd/server`（需正确配置与 MySQL）。
-- 可直接 Docker 构建：`docker build -t rclone-sync-hub .`；`docker compose up -d` 启动 MySQL + 应用。
-- 所有数据库操作经 repository 接口，service 层不依赖 Gorm；database 包封装连接与迁移，错误已包装。
-- 代码含必要注释，关键逻辑未省略。
+- 本项目是单向 `local_to_remote` 上传，不执行远端删除，也不是双向同步工具。
+- MySQL 是持久化协调中心；生产高可用需要使用受管 MySQL 或自行建设复制、备份与故障切换。
+- 多应用实例必须看到相同的本地路径和 rclone 配置。SSE 是进程内事件流，前端每 30 秒会用数据库结果校准一次。
+- remote 的人工删除不会在高频本地扫描中逐文件探测；这是为了避免远端 API 调用再次成为扫描瓶颈。

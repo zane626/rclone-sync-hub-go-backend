@@ -3,7 +3,8 @@
     <n-loading-bar-provider>
       <n-message-provider>
         <n-dialog-provider>
-          <n-layout class="app-layout">
+          <router-view v-if="route.meta.public" />
+          <n-layout v-else class="app-layout">
             <n-layout-header class="app-header">
               <div class="app-header-left">
                 <a href="#/" class="app-logo">
@@ -18,7 +19,10 @@
                   @update:value="handleMenuSelect"
                 />
               </div>
-              <!-- 设置入口已暂时屏蔽 -->
+              <div class="app-header-account" v-if="user">
+                <span>{{ user.username }} · {{ user.role }}</span>
+                <n-button size="small" quaternary @click="handleLogout">退出</n-button>
+              </div>
             </n-layout-header>
             <n-layout-content content-style="padding: 0; display: flex; flex-direction: column; min-height: 0;" class="app-content">
               <div class="app-content-scroll">
@@ -62,15 +66,17 @@ import {
   dateZhCN
 } from 'naive-ui';
 import pkg from '../package.json';
+import { currentUser, logout } from './api/auth';
 
 const footer = {
   projectName: 'Rclone Sync Hub',
   version: pkg.version,
-  githubUrl: 'https://github.com/rclone/rclone-sync-hub-go-backend'
+  githubUrl: 'https://github.com/zane626/rclone-sync-hub-go-backend'
 };
 
 const router = useRouter();
 const route = useRoute();
+const user = ref(currentUser());
 
 const menuOptions = [
   { label: '工作台', key: '/dashboard' },
@@ -83,6 +89,7 @@ const activeKey = ref(route.path);
 watch(
   () => route.path,
   (path) => {
+    user.value = currentUser();
     activeKey.value = path.startsWith('/dashboard')
       || path.startsWith('/folders')
       || path.startsWith('/tasks')
@@ -103,6 +110,12 @@ const themeOverrides = {
 
 function handleMenuSelect(key) {
   router.push(key);
+}
+
+function handleLogout() {
+  logout();
+  user.value = null;
+  router.replace('/login');
 }
 </script>
 
@@ -132,6 +145,14 @@ function handleMenuSelect(key) {
   align-items: center;
   gap: 24px;
   overflow: visible;
+}
+
+.app-header-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .app-logo {

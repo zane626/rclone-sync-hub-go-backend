@@ -7,7 +7,7 @@ const (
 	WatchFolderStatusDetecting = "detecting" // 校验中
 	WatchFolderStatusWatching  = "watching"  // 正在监听（正常工作）
 	WatchFolderStatusStopped   = "stopped"   // 手动停止
-	WatchFolderStatusPaused    = "paused"    // 暂停上传（仍可扫描）
+	WatchFolderStatusPaused    = "paused"    // 暂停扫描与新任务创建
 	WatchFolderStatusError     = "error"     // 出现错误（如路径不可用）
 )
 
@@ -24,21 +24,27 @@ type WatchFolder struct {
 	// 基本配置
 	Name string `gorm:"size:255;not null"` // 显示名称
 	// 注意：MySQL InnoDB 单列索引最大 3072 字节（utf8mb4 约 768 字符），且 LocalPath 上有唯一索引，因此长度限制为 768。
-	LocalPath  string `gorm:"size:768;not null;unique"`                 // 本地路径
-	RemoteName string `gorm:"size:255;not null"`                        // rclone remote 名称
-	RemotePath string `gorm:"size:1024;not null"`                       // 远端路径
-	SyncType   string `gorm:"size:64;not null;default:local_to_remote"` // 同步类型
-	MaxDepth        int    `gorm:"default:0"`                                // 最大监听深度，0 表示不限制
-	FilterKeywords  string `gorm:"type:text"`                                // 过滤关键字，多行存储，每行一个；路径或文件名包含任一关键字（模糊匹配）则排除
-	Enabled         bool   `gorm:"not null;default:true"`                    // 是否启用该监听
+	LocalPath      string `gorm:"size:768;not null;unique"`                                  // 本地路径
+	RemoteName     string `gorm:"size:255;not null"`                                         // rclone remote 名称
+	RemotePath     string `gorm:"size:1024;not null"`                                        // 远端路径
+	SyncType       string `gorm:"size:64;not null;default:local_to_remote"`                  // 同步类型
+	MaxDepth       int    `gorm:"default:0"`                                                 // 最大监听深度，0 表示不限制
+	FilterKeywords string `gorm:"type:text"`                                                 // 过滤关键字，多行存储，每行一个；路径或文件名包含任一关键字（模糊匹配）则排除
+	Enabled        bool   `gorm:"not null;default:true;index:idx_watch_scan_due,priority:1"` // 是否启用该监听
 
 	// 状态信息
-	Status       string     `gorm:"size:32;not null;index"` // detecting / watching / stopped / paused / error
-	LastError    string     `gorm:"type:text"`              // 最近一次错误信息（便于排查）
-	LastScanAt   *time.Time // 最近一次扫描时间
-	LastSyncAt   *time.Time // 最近一次同步时间
-	NextScanAt   *time.Time // 预计下一次扫描时间（可选）
-	LastActiveAt *time.Time // 最近有文件变更 / 上传的时间
+	Status             string     `gorm:"size:32;not null;index"` // detecting / watching / stopped / paused / error
+	LastError          string     `gorm:"type:text"`              // 最近一次错误信息（便于排查）
+	LastScanAt         *time.Time // 兼容字段：最近一次扫描开始时间
+	LastScanStartedAt  *time.Time // 最近一次扫描开始时间
+	LastScanFinishedAt *time.Time // 最近一次扫描结束时间（无论成功失败）
+	LastScanSuccessAt  *time.Time // 最近一次成功扫描结束时间
+	LastScanDurationMs int64      `gorm:"default:0"` // 最近一次扫描耗时（毫秒）
+	LastSyncAt         *time.Time // 最近一次同步时间
+	NextScanAt         *time.Time `gorm:"index:idx_watch_scan_due,priority:2"` // 预计下一次扫描时间（可选）
+	LastActiveAt       *time.Time // 最近有文件变更 / 上传的时间
+	ScanLeaseOwner     string     `gorm:"size:160;index"`
+	ScanLeaseExpiresAt *time.Time `gorm:"index;index:idx_watch_scan_due,priority:3"`
 
 	// 统计维度（便于分析与展示）
 	TotalFileCount int64 `gorm:"default:0"` // 当前已知文件总数（最后一次扫描结果）

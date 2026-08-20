@@ -4,8 +4,11 @@ package database
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -22,6 +25,11 @@ type Config struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxIdleTime time.Duration
+	ConnMaxLifetime time.Duration
+	ConnectTimeout  time.Duration
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	TLS             string
 }
 
 // DSN 返回 MySQL DSN。
@@ -30,8 +38,24 @@ func DSN(c Config) string {
 	if charset == "" {
 		charset = "utf8mb4"
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
-		c.User, c.Password, c.Host, c.Port, c.DBName, charset)
+	driverConfig := mysqlDriver.Config{
+		User:                 c.User,
+		Passwd:               c.Password,
+		Net:                  "tcp",
+		Addr:                 net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
+		DBName:               c.DBName,
+		Params:               map[string]string{"charset": charset, "time_zone": "'+00:00'"},
+		ParseTime:            true,
+		Loc:                  time.UTC,
+		Timeout:              c.ConnectTimeout,
+		ReadTimeout:          c.ReadTimeout,
+		WriteTimeout:         c.WriteTimeout,
+		TLSConfig:            c.TLS,
+		RejectReadOnly:       true,
+		CheckConnLiveness:    true,
+		AllowNativePasswords: false,
+	}
+	return driverConfig.FormatDSN()
 }
 
 // OpenMySQL 使用 Gorm MySQL driver 打开连接并配置连接池；错误使用 %w 包装。
@@ -56,16 +80,11 @@ func OpenMySQL(cfg Config) (*gorm.DB, error) {
 	if cfg.ConnMaxIdleTime > 0 {
 		sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 	}
+	if cfg.ConnMaxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	}
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 	return db, nil
-}
-
-// Migrate 对 models 执行 AutoMigrate；错误使用 %w 包装。
-func Migrate(db *gorm.DB, models ...interface{}) error {
-	if err := db.AutoMigrate(models...); err != nil {
-		return fmt.Errorf("auto migrate: %w", err)
-	}
-	return nil
 }

@@ -1,9 +1,10 @@
-# 本地开发用配置：Air 热重载 + Swagger + 连本地 MySQL（需先 docker compose up mysql -d）
+# 本地开发用配置：Fresh 热重载 + Swagger + docker-compose.dev.yml MySQL
 server:
   port: 8080
   mode: debug
-  embed_frontend: true
+  embed_frontend: false # 本地由 Vite dev server 提供前端并代理 /api
   enable_swagger: true
+  trusted_proxies: []
 
 database:
   host: localhost
@@ -15,16 +16,32 @@ database:
   max_open_conns: 25
   max_idle_conns: 10
   conn_max_idle_time_mins: 10
+  conn_max_lifetime_mins: 30
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 30
+  write_timeout_seconds: 30
 
 scan:
-  local_path: ./data/local
-  enabled: false
   interval_seconds: 300
+  watch_poll_interval_seconds: 30
+  folder_timeout_seconds: 1800
+  file_stable_seconds: 30
+  max_concurrent_folders: 2
+  batch_size: 500
+  lease_seconds: 90
+  heartbeat_seconds: 30
 
 worker:
   max_concurrent: 3
   max_retry: 3
-  queue_size: 1000
+  queue_size: 1000       # 已弃用，仅为兼容旧配置保留
+  poll_interval_milliseconds: 1000
+  lease_seconds: 90
+  heartbeat_seconds: 30
+  task_timeout_seconds: 14400
+  retry_base_seconds: 30
+  retry_max_seconds: 1800
+  progress_persist_seconds: 2
 
 rclone:
   bin_path: rclone
@@ -32,3 +49,16 @@ rclone:
 log:
   level: debug
   format: console
+
+security:
+  enabled: false
+  allowed_local_roots: []
+  allowed_remotes: []
+
+maintenance:
+  interval_hours: 24
+  upload_log_retention_days: 30
+  task_retention_days: 365
+  scan_run_retention_days: 90
+  audit_log_retention_days: 180
+  delete_batch_size: 5000

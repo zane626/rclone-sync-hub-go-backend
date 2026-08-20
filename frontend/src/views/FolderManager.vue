@@ -21,7 +21,14 @@
           <n-button size="small" type="primary" @click="handleSearch">查询</n-button>
           <n-button size="small" quaternary @click="handleReset">重置</n-button>
         </div>
-        <div class="app-toolbar-actions">
+        <div v-if="isAdmin" class="app-toolbar-actions">
+          <n-button
+            size="small"
+            :loading="scanTriggering"
+            @click="handleTriggerScan"
+          >
+            立即扫描
+          </n-button>
           <n-button type="primary" size="small" @click="openCreate">
             新建监听文件夹
           </n-button>
@@ -147,8 +154,13 @@ import {
 import { fetchWatchFolders, createWatchFolder, updateWatchFolder, deleteWatchFolder } from '../api/watchFolders';
 import { fetchSubdirs } from '../api/fs';
 import { fetchRcloneConfigs } from '../api/rclone';
+import { currentUser } from '../api/auth';
+import { triggerScan } from '../api/scanner';
 
 const tableData = ref([]);
+const scanTriggering = ref(false);
+// No stored user means authentication is disabled in local development.
+const isAdmin = currentUser()?.role !== 'viewer';
 
 const statusOptions = [
   { label: '全部', value: null },
@@ -174,7 +186,7 @@ const pagination = ref({
   pageSize: 20,
   itemCount: 0,
   showSizePicker: true,
-  pageSizes: [20, 50, 100, 200, 500, 1000, 10000],
+  pageSizes: [20, 50, 100, 200],
   prefix: (info) => `共 ${info.itemCount} 条`,
   onChange: (page) => {
     pagination.value.page = page;
@@ -182,6 +194,7 @@ const pagination = ref({
   },
   onPageSizeChange: (pageSize) => {
     pagination.value.pageSize = pageSize;
+    pagination.value.page = 1;
     loadData();
   }
 });
@@ -249,6 +262,7 @@ const columns = [
     fixed: 'right',
     width: 200,
     render(row) {
+      if (!isAdmin) return h('span', { style: 'color: #94a3b8' }, '只读');
       const toggleLabel = row.status === 'paused' ? '启动' : '暂停';
       return h(
         NSpace,
@@ -396,7 +410,8 @@ async function loadData() {
       page: pagination.value.page,
       page_size: pagination.value.pageSize
     });
-    const total = Number(res.total) ?? 0;
+    const parsedTotal = Number(res.total);
+    const total = Number.isFinite(parsedTotal) ? parsedTotal : 0;
     pagination.value.itemCount = total;
 
     tableData.value = (res.items || []).map((item) => ({
@@ -406,15 +421,18 @@ async function loadData() {
       localPath: item.LocalPath,
       remoteName: item.RemoteName,
       remotePath: item.RemotePath,
-      status: item.Status
+      status: item.Status,
+      maxDepth: item.MaxDepth,
+      filterKeywords: item.FilterKeywords,
+      scanIntervalSeconds: item.ScanIntervalSeconds,
+      syncType: item.SyncType
     }));
 
     const maxPage = Math.max(1, Math.ceil(total / pagination.value.pageSize));
     if (pagination.value.page > maxPage) {
       pagination.value.page = 1;
-      await loadData();
+      return loadData();
     }
-    pagination.value.itemCount = Number(total) ?? 0;
   } catch (e) {
     message.error('加载监听文件夹失败');
     tableData.value = [];
@@ -434,10 +452,24 @@ function handleReset() {
   loadData();
 }
 
+async function handleTriggerScan() {
+  scanTriggering.value = true;
+  try {
+    const result = await triggerScan();
+    const count = Number(result?.enqueued) || 0;
+    message.success(`已提交 ${count} 个目录的扫描任务`);
+    window.setTimeout(() => loadData(), 500);
+  } catch (e) {
+    message.error('提交扫描任务失败');
+  } finally {
+    scanTriggering.value = false;
+  }
+}
+
 async function handleToggleStatus(row) {
   const targetStatus = row.status === 'paused' ? 'watching' : 'paused';
   try {
-    await updateWatchFolder(row.Id, { status: targetStatus });
+    await updateWatchFolder(row.id, { status: targetStatus });
     message.success(targetStatus === 'paused' ? '已暂停' : '已启动');
     loadData();
   } catch (e) {
@@ -453,7 +485,6 @@ function handleDelete(row) {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        console.log(row);
         await deleteWatchFolder(row.id);
         message.success('删除成功');
         loadData();
@@ -488,9 +519,9 @@ function openEdit(row) {
     local_path: row.localPath,
     remote_name: row.remoteName,
     remote_path: row.remotePath,
-    max_depth: row.maxDepth || 5,
+    max_depth: row.maxDepth ?? 0,
     filter_keywords: (row.FilterKeywords ?? row.filterKeywords ?? ''),
-    scan_interval_seconds: row.scanIntervalSeconds || 300,
+    scan_interval_seconds: row.scanIntervalSeconds ?? 300,
     sync_type: row.syncType || 'local_to_remote'
   });
   drawerVisible.value = true;
@@ -514,7 +545,7 @@ function handleSubmit() {
         local_path: form.value.local_path,
         remote_name: form.value.remote_name,
         remote_path: form.value.remote_path,
-        max_depth: form.value.max_depth || 5,
+        max_depth: form.value.max_depth ?? 0,
         filter_keywords: normalizeFilterKeywords(form.value.filter_keywords),
         scan_interval_seconds: form.value.scan_interval_seconds || 300,
         sync_type: form.value.sync_type
@@ -584,4 +615,3 @@ onMounted(() => {
   align-items: center;
 }
 </style>
-

@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up the Rclone Sync Hub database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/rclone-sync-hub
+ExecStart=/usr/bin/docker compose --profile operations run --rm backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

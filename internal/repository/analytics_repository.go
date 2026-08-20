@@ -26,6 +26,7 @@ type WatchFolderStat struct {
 	PendingCount    int64
 	RunningCount    int64
 	PausedCount     int64
+	CanceledCount   int64
 	UploadedBytes   int64
 	UploadedFiles   int64
 }
@@ -46,6 +47,7 @@ type OverviewCounts struct {
 	TaskSuccess      int64
 	TaskFailed       int64
 	TaskPaused       int64
+	TaskCanceled     int64
 	UploadedBytes    int64
 	UploadedFiles    int64
 	WatchFolderCount int64
@@ -80,39 +82,35 @@ func NewAnalyticsRepository(db *gorm.DB) AnalyticsRepository {
 
 func (r *analyticsRepository) Overview() (OverviewCounts, error) {
 	var o OverviewCounts
-	var taskTotal int64
-	if err := r.db.Model(&model.UploadTask{}).Count(&taskTotal).Error; err != nil {
+	since24h := time.Now().Add(-24 * time.Hour)
+	if err := r.db.Model(&model.UploadTask{}).Select(`
+		count(*) as task_total,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_pending,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_running,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_success,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_failed,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_paused,
+		coalesce(sum(case when status = ? then 1 else 0 end), 0) as task_canceled,
+		coalesce(sum(case when status = ? then file_size else 0 end), 0) as uploaded_bytes,
+		coalesce(sum(case when status = ? and finished_at >= ? then 1 else 0 end), 0) as recent24h_done,
+		coalesce(sum(case when status = ? and updated_at >= ? then 1 else 0 end), 0) as recent24h_failed
+	`,
+		model.TaskStatusPending,
+		model.TaskStatusRunning,
+		model.TaskStatusSuccess,
+		model.TaskStatusFailed,
+		model.TaskStatusPaused,
+		model.TaskStatusCanceled,
+		model.TaskStatusSuccess,
+		model.TaskStatusSuccess, since24h,
+		model.TaskStatusFailed, since24h,
+	).Scan(&o).Error; err != nil {
 		return o, fmt.Errorf("analytics overview tasks: %w", err)
 	}
-	o.TaskTotal = taskTotal
-	for _, s := range []string{model.TaskStatusPending, model.TaskStatusRunning, model.TaskStatusSuccess, model.TaskStatusFailed, model.TaskStatusPaused} {
-		var n int64
-		if err := r.db.Model(&model.UploadTask{}).Where("status = ?", s).Count(&n).Error; err != nil {
-			continue
-		}
-		switch s {
-		case model.TaskStatusPending:
-			o.TaskPending = n
-		case model.TaskStatusRunning:
-			o.TaskRunning = n
-		case model.TaskStatusSuccess:
-			o.TaskSuccess = n
-		case model.TaskStatusFailed:
-			o.TaskFailed = n
-		case model.TaskStatusPaused:
-			o.TaskPaused = n
-		}
-	}
-	var sumBytes int64
-	r.db.Model(&model.UploadTask{}).Where("status = ?", model.TaskStatusSuccess).Select("coalesce(sum(file_size),0)").Scan(&sumBytes)
-	o.UploadedBytes = sumBytes
 	o.UploadedFiles = o.TaskSuccess
 	if err := r.db.Model(&model.WatchFolder{}).Count(&o.WatchFolderCount).Error; err != nil {
-		o.WatchFolderCount = 0
+		return o, fmt.Errorf("analytics overview watch folders: %w", err)
 	}
-	since24h := time.Now().Add(-24 * time.Hour)
-	r.db.Model(&model.UploadTask{}).Where("status = ? AND finished_at >= ?", model.TaskStatusSuccess, since24h).Count(&o.Recent24hDone)
-	r.db.Model(&model.UploadTask{}).Where("status = ? AND updated_at >= ?", model.TaskStatusFailed, since24h).Count(&o.Recent24hFailed)
 	return o, nil
 }
 
@@ -138,6 +136,7 @@ func (r *analyticsRepository) GroupTaskByWatchFolder() ([]WatchFolderStat, error
 		PendingCount    int64
 		RunningCount    int64
 		PausedCount     int64
+		CanceledCount   int64
 		UploadedBytes   int64
 		UploadedFiles   int64
 	}
@@ -146,20 +145,22 @@ func (r *analyticsRepository) GroupTaskByWatchFolder() ([]WatchFolderStat, error
 	err := r.db.Model(&model.UploadTask{}).
 		Select(`
 			watch_folder_id as watch_folder_id,
-			COALESCE(NULLIF(watch_folder_name,''), '(未关联)') as watch_folder_name,
+			COALESCE(MAX(NULLIF(watch_folder_name,'')), '(未关联)') as watch_folder_name,
 			count(*) as task_count,
 			sum(case when status = ? then 1 else 0 end) as success_count,
 			sum(case when status = ? then 1 else 0 end) as failed_count,
 			sum(case when status = ? then 1 else 0 end) as pending_count,
 			sum(case when status = ? then 1 else 0 end) as running_count,
 			sum(case when status = ? then 1 else 0 end) as paused_count,
+			sum(case when status = ? then 1 else 0 end) as canceled_count,
 			sum(case when status = ? then file_size else 0 end) as uploaded_bytes,
 			sum(case when status = ? then 1 else 0 end) as uploaded_files
 		`,
 			model.TaskStatusSuccess, model.TaskStatusFailed, model.TaskStatusPending,
-			model.TaskStatusRunning, model.TaskStatusPaused, model.TaskStatusSuccess, model.TaskStatusSuccess,
+			model.TaskStatusRunning, model.TaskStatusPaused, model.TaskStatusCanceled,
+			model.TaskStatusSuccess, model.TaskStatusSuccess,
 		).
-		Group("watch_folder_id, watch_folder_name").
+		Group("watch_folder_id").
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("analytics group by watch_folder: %w", err)
@@ -175,6 +176,7 @@ func (r *analyticsRepository) GroupTaskByWatchFolder() ([]WatchFolderStat, error
 			PendingCount:    rows[i].PendingCount,
 			RunningCount:    rows[i].RunningCount,
 			PausedCount:     rows[i].PausedCount,
+			CanceledCount:   rows[i].CanceledCount,
 			UploadedBytes:   rows[i].UploadedBytes,
 			UploadedFiles:   rows[i].UploadedFiles,
 		}
