@@ -185,11 +185,12 @@ func TestReleaseLeaseFinalizesConcurrentCancellation(t *testing.T) {
 	if err := NewTaskRepository(db).ReleaseLease(context.Background(), task.ID, task.LeaseOwner); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.First(&task, task.ID).Error; err != nil {
+	var persistedTask model.UploadTask
+	if err := db.First(&persistedTask, task.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != model.TaskStatusCanceled || task.CancelRequestedAt != nil || task.CanceledAt == nil {
-		t.Fatalf("canceled task became unclaimable instead of finalized: %+v", task)
+	if persistedTask.Status != model.TaskStatusCanceled || persistedTask.CancelRequestedAt != nil || persistedTask.CanceledAt == nil {
+		t.Fatalf("canceled task became unclaimable instead of finalized: %+v", persistedTask)
 	}
 }
 
