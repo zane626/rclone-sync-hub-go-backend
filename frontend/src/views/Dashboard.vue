@@ -7,26 +7,27 @@
         <p class="page-description">扫描节点、任务队列与传输结果的统一态势视图。</p>
       </div>
       <div class="page-actions">
+        <router-link class="ui-button" to="/operations"><UiIcon name="activity" :size="16" /> 运行中心</router-link>
         <div class="segmented" aria-label="统计周期">
           <button v-for="option in dayOptions" :key="option" type="button" :class="{ 'is-active': days === option }" @click="selectDays(option)">
             {{ option }}D
           </button>
         </div>
-        <button class="ui-button" type="button" :disabled="loading" @click="loadDashboard">
+        <button class="ui-button" type="button" :disabled="loading" @click="loadDashboard()">
           <UiIcon name="refresh" :size="16" /> 刷新数据
         </button>
       </div>
     </header>
 
-    <div class="signal-ribbon">
+    <div class="signal-ribbon" :class="{ 'is-degraded': !operational && !systemChecking, 'is-checking': systemChecking }">
       <div class="signal-ribbon__title">
         <span class="signal-dot" />
-        <div><strong>系统链路正常</strong><small>ALL SERVICES OPERATIONAL</small></div>
+        <div><strong>{{ systemChecking ? '正在探测系统链路' : operational ? '系统链路正常' : '系统链路异常' }}</strong><small>{{ systemChecking ? 'SERVICE PROBE IN PROGRESS' : operational ? 'ALL SERVICES OPERATIONAL' : 'SERVICE DEGRADED' }}</small></div>
       </div>
       <div class="signal-ribbon__item"><span>监控目录</span><strong>{{ overview.watch_folder_count || 0 }}</strong></div>
       <div class="signal-ribbon__item"><span>24H 完成</span><strong>{{ overview.recent_24h_completed || 0 }}</strong></div>
       <div class="signal-ribbon__item is-alert"><span>24H 异常</span><strong>{{ overview.recent_24h_failed || 0 }}</strong></div>
-      <div class="signal-ribbon__scan"><UiIcon name="radar" :size="20" /> LIVE SYNC</div>
+      <div class="signal-ribbon__scan"><UiIcon name="radar" :size="20" /> {{ systemChecking ? 'PROBING' : operational ? 'LIVE SYNC' : 'CHECK NODE' }}</div>
     </div>
 
     <div v-if="loading && !data" class="ui-panel loading-layer">
@@ -167,16 +168,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import UiIcon from '../components/UiIcon.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { getDashboard } from '../api/analytics';
+import { useSystemStatus } from '../composables/useSystemStatus';
 import { errorText, toast } from '../composables/useUi';
 
 const dayOptions = [7, 14, 30];
 const days = ref(7);
 const loading = ref(false);
 const data = ref(null);
+const { operational, checking: systemChecking } = useSystemStatus();
+let refreshTimer;
 
 const overview = computed(() => data.value?.overview || {});
 const trend = computed(() => data.value?.by_time || []);
@@ -253,19 +257,25 @@ function relativeDate(value) {
   return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-async function loadDashboard() {
-  loading.value = true;
+async function loadDashboard(silent = false) {
+  if (!silent) loading.value = true;
   try {
     data.value = await getDashboard(days.value);
   } catch (error) {
     if (!data.value) data.value = null;
-    toast(errorText(error, '运行数据加载失败'), 'error');
+    if (!silent) toast(errorText(error, '运行数据加载失败'), 'error');
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
-onMounted(loadDashboard);
+onMounted(() => {
+  loadDashboard();
+  refreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadDashboard(true);
+  }, 30000);
+});
+onBeforeUnmount(() => window.clearInterval(refreshTimer));
 </script>
 
 <style scoped>
@@ -279,6 +289,10 @@ onMounted(loadDashboard);
 .signal-ribbon__item { padding: 4px 22px; border-left: 1px solid var(--line); }.signal-ribbon__item span, .signal-ribbon__item strong { display: block; }.signal-ribbon__item span { color: var(--text-muted); font-size: 9px; }.signal-ribbon__item strong { margin-top: 4px; color: var(--text-strong); font: 600 16px var(--font-mono); }.signal-ribbon__item.is-alert strong { color: var(--red); }
 .signal-ribbon__scan { display: flex; align-items: center; gap: 8px; padding-left: 22px; color: var(--cyan); font: 600 9px var(--font-mono); letter-spacing: .12em; }
 .signal-ribbon__scan .ui-icon { animation: spin 5s linear infinite; }
+.signal-ribbon.is-degraded { border-color: rgba(255,98,125,.18); background: linear-gradient(90deg, rgba(255,98,125,.06), rgba(14,23,34,.84) 40%, rgba(255,180,74,.025)); }
+.signal-ribbon.is-degraded .signal-dot { background: var(--red); box-shadow: 0 0 0 6px rgba(255,98,125,.08), 0 0 12px var(--red); }
+.signal-ribbon.is-degraded .signal-ribbon__title strong { color:#ffdce2; }.signal-ribbon.is-degraded .signal-ribbon__title small { color:#815361; }.signal-ribbon.is-degraded .signal-ribbon__scan { color:var(--amber); }
+.signal-ribbon.is-checking { border-color:rgba(255,180,74,.15); }.signal-ribbon.is-checking .signal-dot { background:var(--amber); box-shadow:0 0 0 6px rgba(255,180,74,.07),0 0 12px var(--amber); animation:pulse 1.2s infinite; }.signal-ribbon.is-checking .signal-ribbon__scan { color:var(--amber); }
 .metric-grid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(5,minmax(160px,1fr)); gap: 14px; }
 .metric-card { position: relative; min-height: 164px; display: flex; flex-direction: column; overflow: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 17px; background: linear-gradient(145deg, rgba(20,29,43,.9), rgba(10,16,25,.9)); box-shadow: 0 18px 45px rgba(0,0,0,.17); transition: transform .18s ease,border-color .18s ease; }
 .metric-card:hover { transform: translateY(-3px); border-color: rgba(88,224,255,.23); }.metric-card__top { display: flex; align-items: center; justify-content: space-between; }.metric-card__icon { width: 36px; height: 36px; display: grid; place-items: center; color: var(--cyan); border: 1px solid rgba(88,224,255,.17); border-radius: 11px; background: rgba(88,224,255,.07); }.metric-card__code { color: #435064; font: 500 8px var(--font-mono); letter-spacing: .1em; }.metric-card > strong { margin-top: 22px; color: var(--text-strong); font: 600 clamp(22px,2.5vw,31px)/1 var(--font-mono); letter-spacing: -.04em; }.metric-card__bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: auto; }.metric-card__bottom span { color: #9eabba; font-size: 11px; }.metric-card__bottom small { color: #455165; font: 500 8px var(--font-mono); }.metric-card__beam { position: absolute; inset: auto 18px 0; height: 1px; background: linear-gradient(90deg, transparent,var(--cyan),transparent); opacity: .55; }

@@ -18,14 +18,14 @@
         </span>
       </a>
 
-      <div class="engine-status">
+      <router-link to="/operations" class="engine-status" :class="{ 'is-degraded': !operational && !systemChecking, 'is-checking': systemChecking }">
         <span class="engine-status__pulse" />
         <div>
-          <strong>传输引擎在线</strong>
-          <small>ENGINE / OPERATIONAL</small>
+          <strong>{{ engineStatusLabel }}</strong>
+          <small>{{ engineStatusCaption }}</small>
         </div>
-        <span class="engine-status__code">01</span>
-      </div>
+        <span class="engine-status__code">{{ systemStatus.latencyMilliseconds || '--' }}</span>
+      </router-link>
 
       <nav class="side-nav" aria-label="主导航">
         <span class="side-nav__label">COMMAND</span>
@@ -74,7 +74,7 @@
             <span>{{ clock.date }}</span>
             <strong>{{ clock.time }}</strong>
           </div>
-          <div class="node-pill"><span /> API NODE CN-01</div>
+          <router-link to="/operations" class="node-pill" :class="{ 'is-degraded': !operational && !systemChecking, 'is-checking': systemChecking }"><span /> {{ nodeLabel }}</router-link>
           <button class="topbar-account" type="button" title="退出登录" @click="handleLogout">
             <span>{{ initials }}</span>
             <div>
@@ -105,6 +105,7 @@ import pkg from '../package.json';
 import UiIcon from './components/UiIcon.vue';
 import UiOverlay from './components/UiOverlay.vue';
 import { currentUser, logout } from './api/auth';
+import { useSystemStatus } from './composables/useSystemStatus';
 
 const route = useRoute();
 const router = useRouter();
@@ -112,17 +113,22 @@ const sidebarOpen = ref(false);
 const user = ref(currentUser());
 const version = pkg.version;
 const clock = reactive({ date: '', time: '' });
+const { status: systemStatus, operational, checking: systemChecking } = useSystemStatus({ interval: 15000 });
 let clockTimer;
 
 const navItems = [
   { path: '/dashboard', label: '运行总览', caption: 'Overview', icon: 'grid', index: '01' },
   { path: '/folders', label: '监控目录', caption: 'Watch folders', icon: 'folder', index: '02' },
-  { path: '/tasks', label: '任务中心', caption: 'Transfer queue', icon: 'tasks', index: '03' }
+  { path: '/tasks', label: '任务中心', caption: 'Transfer queue', icon: 'tasks', index: '03' },
+  { path: '/operations', label: '运行中心', caption: 'Observability', icon: 'activity', index: '04' }
 ];
 
 const pageMeta = computed(() => navItems.find((item) => route.path.startsWith(item.path)) || navItems[0]);
 const initials = computed(() => String(user.value?.username || 'RS').slice(0, 2).toUpperCase());
 const roleLabel = computed(() => user.value?.role === 'viewer' ? '只读观察员' : '系统管理员');
+const engineStatusLabel = computed(() => systemChecking.value ? '正在探测服务节点' : operational.value ? '传输引擎在线' : '传输引擎异常');
+const engineStatusCaption = computed(() => systemChecking.value ? 'ENGINE / CHECKING' : operational.value ? 'ENGINE / OPERATIONAL' : 'ENGINE / DEGRADED');
+const nodeLabel = computed(() => systemChecking.value ? 'API NODE CHECKING' : operational.value ? 'API NODE ONLINE' : 'API NODE DEGRADED');
 
 function updateClock() {
   const now = new Date();
@@ -177,11 +183,17 @@ onBeforeUnmount(() => window.clearInterval(clockTimer));
 .brand-copy strong { font-size: 16px; letter-spacing: 0.16em; }
 .brand-copy small { margin-top: 7px; color: var(--text-muted); font: 600 9px/1 var(--font-mono); letter-spacing: 0.32em; }
 
-.engine-status { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin: 25px 5px 28px; padding: 12px; border: 1px solid rgba(61, 225, 162, 0.15); border-radius: 12px; background: rgba(61, 225, 162, 0.045); }
+.engine-status { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin: 25px 5px 28px; padding: 12px; color:inherit; border: 1px solid rgba(61, 225, 162, 0.15); border-radius: 12px; background: rgba(61, 225, 162, 0.045); text-decoration:none; transition:160ms ease; }
+.engine-status:hover { border-color:rgba(61,225,162,.28); background:rgba(61,225,162,.07); transform:translateY(-1px); }
 .engine-status__pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px rgba(61, 225, 162, 0.08), 0 0 14px var(--green); }
 .engine-status strong { display: block; color: #dffcf2; font-size: 12px; font-weight: 600; }
 .engine-status small { display: block; margin-top: 4px; color: #4e7d6b; font: 500 8px/1 var(--font-mono); letter-spacing: 0.1em; }
 .engine-status__code { color: #3f6d5c; font: 600 10px var(--font-mono); }
+.engine-status__code::after { content:'ms'; margin-left:2px; color:#365c4e; font-size:7px; }
+.engine-status.is-degraded { border-color:rgba(255,98,125,.17); background:rgba(255,98,125,.045); }
+.engine-status.is-degraded .engine-status__pulse { background:var(--red); box-shadow:0 0 0 5px rgba(255,98,125,.07),0 0 14px var(--red); }
+.engine-status.is-degraded strong { color:#ffdce2; }.engine-status.is-degraded small,.engine-status.is-degraded .engine-status__code { color:#865563; }
+.engine-status.is-checking { border-color:rgba(255,180,74,.14); background:rgba(255,180,74,.035); }.engine-status.is-checking .engine-status__pulse { background:var(--amber); box-shadow:0 0 0 5px rgba(255,180,74,.06),0 0 12px var(--amber); animation:pulse 1.2s infinite; }
 
 .side-nav { display: flex; flex-direction: column; gap: 7px; }
 .side-nav__label { margin: 0 12px 8px; color: #475366; font: 600 9px var(--font-mono); letter-spacing: 0.22em; }
@@ -214,8 +226,11 @@ onBeforeUnmount(() => window.clearInterval(clockTimer));
 .live-clock { display: flex; align-items: baseline; gap: 10px; padding-right: 15px; border-right: 1px solid var(--line); font: 500 10px var(--font-mono); }
 .live-clock span { color: var(--text-muted); }
 .live-clock strong { color: var(--text); letter-spacing: .08em; }
-.node-pill { display: flex; align-items: center; gap: 7px; padding: 8px 11px; color: #718093; border: 1px solid var(--line); border-radius: 999px; font: 500 9px var(--font-mono); letter-spacing: .07em; }
+.node-pill { display: flex; align-items: center; gap: 7px; padding: 8px 11px; color: #718093; border: 1px solid var(--line); border-radius: 999px; font: 500 9px var(--font-mono); letter-spacing: .07em; text-decoration:none; transition:150ms ease; }
+.node-pill:hover { color:var(--text); border-color:rgba(88,224,255,.2); }
 .node-pill span { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+.node-pill.is-degraded { color:#9a6c74; border-color:rgba(255,98,125,.14); }.node-pill.is-degraded span { background:var(--red); box-shadow:0 0 8px var(--red); }
+.node-pill.is-checking span { background:var(--amber); box-shadow:0 0 8px var(--amber); animation:pulse 1.2s infinite; }
 .topbar-account { gap: 9px; padding: 0; color: inherit; border: 0; background: none; cursor: pointer; }
 .topbar-account > span { width: 34px; height: 34px; }
 .topbar-account div { text-align: left; }
