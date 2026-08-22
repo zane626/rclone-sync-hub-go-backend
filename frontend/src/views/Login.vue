@@ -3,6 +3,9 @@
     <div class="login-grid" />
     <div class="login-aurora is-cyan" />
     <div class="login-aurora is-violet" />
+    <button class="icon-button login-theme-toggle" type="button" :title="isDark ? '切换到白天主题' : '切换到黑夜主题'" :aria-label="isDark ? '切换到白天主题' : '切换到黑夜主题'" @click="toggleTheme">
+      <UiIcon :name="isDark ? 'sun' : 'moon'" :size="18" />
+    </button>
 
     <section class="login-showcase" aria-label="产品介绍">
       <a class="login-brand" href="#/login">
@@ -101,6 +104,7 @@ import { reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import UiIcon from '../components/UiIcon.vue';
 import { login } from '../api/auth';
+import { useTheme } from '../composables/useTheme';
 
 const route = useRoute();
 const router = useRouter();
@@ -108,6 +112,7 @@ const loading = ref(false);
 const showPassword = ref(false);
 const errorMessage = ref('');
 const form = reactive({ username: '', password: '' });
+const { isDark, toggleTheme } = useTheme();
 
 async function submit() {
   if (!form.username.trim() || !form.password) {
@@ -130,6 +135,7 @@ async function submit() {
 
 <style scoped>
 .login-page { position: relative; min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(420px, .85fr); overflow: hidden; background: #070b12; isolation: isolate; }
+.login-theme-toggle { position: absolute; z-index: 5; top: 32px; left: calc(57.5% + 28px); }
 .login-grid { position: absolute; inset: 0; z-index: -3; opacity: .28; background-image: linear-gradient(rgba(104,134,171,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(104,134,171,.13) 1px, transparent 1px); background-size: 52px 52px; mask-image: radial-gradient(circle at 44% 45%, black, transparent 76%); }
 .login-aurora { position: absolute; z-index: -2; width: 520px; height: 520px; border-radius: 50%; filter: blur(120px); opacity: .12; }
 .login-aurora.is-cyan { top: -220px; left: 22%; background: var(--cyan); }
@@ -200,6 +206,7 @@ async function submit() {
   .showcase-copy { margin-top: 55px; }.showcase-copy h1 { font-size: 42px; }
   .showcase-metrics { margin-top: 45px; }
   .login-access { min-height: 620px; padding: 70px 18px; }
+  .login-theme-toggle { top: 24px; right: 22px; left: auto; }
 }
 @media (max-width: 480px) {
   .showcase-copy h1 { font-size: 34px; }.showcase-metrics { gap: 19px; }

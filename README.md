@@ -6,7 +6,11 @@
 
 | 模块 | 功能 |
 |---|---|
-| 监听目录 | 多目录配置、独立扫描周期、深度和关键字过滤、启停、立即扫描 |
+| 管理界面 | 黑夜/白天主题持久化、跨标签页登录会话、退出二次确认、响应式控制台 |
+| 监听目录 | 多目录配置、独立扫描周期、深度和关键字过滤、启停、立即扫描、本地目录逐层选择 |
+| 本地文件索引 | 持久化已扫描文件、按目录逐层浏览、上传/排队/失败/缺失等状态展示 |
+| 远端路由 | 可复用 rclone 目标独立管理，监控目录通过路由绑定目标，历史配置自动迁移 |
+| 远端文件索引 | 后台低频 `lsjson` 流式扫描、完整路径持久化、目录树浏览、缺失记录保留、手工立即扫描 |
 | 增量扫描 | 文件大小 + 纳秒 mtime 指纹、稳定窗口、快照批量写入、变更版本重新建单、删除文件标记 |
 | 扫描可靠性 | `next_scan_at` 调度、目录超时、失败自动恢复、扫描历史、目录级并行、分布式租约和心跳 |
 | 上传队列 | MySQL 持久化队列、`FOR UPDATE SKIP LOCKED` 领取、优先级、租约续期、进程崩溃恢复 |
@@ -111,12 +115,13 @@ pnpm --dir frontend dev
 
 - 任务：`/api/tasks`、`/api/tasks/:id/logs`、`/api/stats`
 - 分析：`/api/analytics/dashboard`
-- 监听目录：`/api/watch-folders`
+- 监听目录：`/api/watch-folders`、`GET /api/watch-folders/:id/files`
+- 远端路由：`/api/remote-routes`、`GET /api/remote-routes/:id/files`
 - 扫描历史：`/api/scan-runs`
 - 实时事件：`/api/events`
 - rclone remote：`/api/rclone/configs`
 
-管理员写接口包括任务创建/重试/暂停/取消/删除、批量操作、异步立即扫描（`POST /api/scan`）、监听目录管理和审计日志。`/metrics` 使用独立监控 Bearer token；未配置时要求管理员 token。Swagger 只建议在开发环境开启。
+管理员写接口包括任务创建/重试/暂停/取消/删除、批量操作、异步立即扫描（`POST /api/scan`）、监听目录管理、远端路由管理与远端扫描（`POST /api/remote-routes/:id/scan`、`POST /api/remote-routes/scan`）和审计日志。`/metrics` 使用独立监控 Bearer token；未配置时要求管理员 token。Swagger 只建议在开发环境开启。
 
 ## 验证与发布门禁
 
@@ -152,4 +157,4 @@ docker compose up -d app
 - 本项目是单向 `local_to_remote` 上传，不执行远端删除，也不是双向同步工具。
 - MySQL 是持久化协调中心；生产高可用需要使用受管 MySQL 或自行建设复制、备份与故障切换。
 - 多应用实例必须看到相同的本地路径和 rclone 配置。SSE 是进程内事件流，前端每 30 秒会用数据库结果校准一次。
-- remote 的人工删除不会在高频本地扫描中逐文件探测；这是为了避免远端 API 调用再次成为扫描瓶颈。
+- 高频本地扫描不会逐文件访问 remote；远端变化由独立的低频路由扫描器读取并持久化，因此不会阻塞本地任务发现与上传。

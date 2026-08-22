@@ -15,6 +15,8 @@ func Router(
 	authHandler *AuthHandler,
 	operationsHandler *OperationsHandler,
 	eventHandler *EventHandler,
+	remoteRouteHandler *RemoteRouteHandler,
+	fileIndexHandler *FileIndexHandler,
 	securityMiddleware *SecurityMiddleware,
 ) {
 	api := r.Group("/api")
@@ -37,6 +39,10 @@ func Router(
 	protected.GET("/rclone/configs", rcloneHandler.ListConfigs)
 	protected.GET("/watch-folders", watchHandler.List)
 	protected.GET("/watch-folders/:id", watchHandler.Get)
+	protected.GET("/watch-folders/:id/files", fileIndexHandler.BrowseWatchFolder)
+	protected.GET("/remote-routes", remoteRouteHandler.List)
+	protected.GET("/remote-routes/:id", remoteRouteHandler.Get)
+	protected.GET("/remote-routes/:id/files", remoteRouteHandler.BrowseFiles)
 	protected.GET("/fs/subdirs", fsHandler.ListSubDirs)
 	protected.GET("/scan-runs", operationsHandler.ListScanRuns)
 	protected.GET("/events", eventHandler.Stream)
@@ -56,5 +62,10 @@ func Router(
 	admin.POST("/watch-folders", watchHandler.Create)
 	admin.PUT("/watch-folders/:id", watchHandler.Update)
 	admin.DELETE("/watch-folders/:id", watchHandler.Delete)
+	admin.POST("/remote-routes", remoteRouteHandler.Create)
+	admin.PUT("/remote-routes/:id", remoteRouteHandler.Update)
+	admin.DELETE("/remote-routes/:id", remoteRouteHandler.Delete)
+	admin.POST("/remote-routes/scan", remoteRouteHandler.ScanAll)
+	admin.POST("/remote-routes/:id/scan", remoteRouteHandler.Scan)
 	admin.GET("/audit-logs", operationsHandler.ListAuditLogs)
 }

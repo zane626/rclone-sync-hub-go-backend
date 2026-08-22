@@ -11,10 +11,14 @@ definitions:
     type: object
   internal_api.FSSubDirListResponse:
     properties:
+      current_path:
+        type: string
       items:
         items:
           $ref: '#/definitions/internal_api.FSSubDir'
         type: array
+      parent_path:
+        type: string
     type: object
   internal_api.LoginRequest:
     properties:
@@ -27,6 +31,36 @@ definitions:
     required:
     - password
     - username
+    type: object
+  internal_api.RemoteRouteCreateReq:
+    properties:
+      enabled:
+        type: boolean
+      name:
+        type: string
+      remote_name:
+        type: string
+      remote_path:
+        type: string
+      scan_interval_seconds:
+        type: integer
+    required:
+    - name
+    - remote_name
+    - remote_path
+    type: object
+  internal_api.RemoteRouteUpdateReq:
+    properties:
+      enabled:
+        type: boolean
+      name:
+        type: string
+      remote_name:
+        type: string
+      remote_path:
+        type: string
+      scan_interval_seconds:
+        type: integer
     type: object
   internal_api.TaskBatchReq:
     properties:
@@ -77,6 +111,8 @@ definitions:
         type: string
       remote_path:
         type: string
+      remote_route_id:
+        type: integer
       scan_interval_seconds:
         description: 可选，默认 300
         type: integer
@@ -86,8 +122,6 @@ definitions:
     required:
     - local_path
     - name
-    - remote_name
-    - remote_path
     type: object
   internal_api.WatchFolderUpdateReq:
     properties:
@@ -105,6 +139,8 @@ definitions:
         type: string
       remote_path:
         type: string
+      remote_route_id:
+        type: integer
       scan_interval_seconds:
         type: integer
       status:
@@ -147,6 +183,51 @@ definitions:
       uploadedAt:
         type: string
       watchFolderID:
+        type: integer
+    type: object
+  rclone-sync-hub_internal_model.RemoteRoute:
+    properties:
+      createdAt:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: integer
+      lastError:
+        type: string
+      lastScanDurationMs:
+        type: integer
+      lastScanFinishedAt:
+        type: string
+      lastScanStartedAt:
+        type: string
+      lastScanSuccessAt:
+        type: string
+      name:
+        type: string
+      nextScanAt:
+        type: string
+      remoteName:
+        type: string
+      remotePath:
+        type: string
+      routeKey:
+        type: string
+      scanIntervalSeconds:
+        type: integer
+      scanLeaseExpiresAt:
+        type: string
+      scanLeaseOwner:
+        type: string
+      status:
+        type: string
+      totalFileCount:
+        type: integer
+      totalFileSize:
+        type: integer
+      updatedAt:
+        type: string
+      watchFolderCount:
         type: integer
     type: object
   rclone-sync-hub_internal_model.UploadLog:
@@ -325,6 +406,9 @@ definitions:
       remotePath:
         description: 远端路径
         type: string
+      remoteRouteID:
+        description: 可复用远端路由 ID
+        type: integer
       scanIntervalSeconds:
         description: 配置相关扩展
         type: integer
@@ -395,6 +479,54 @@ definitions:
         items:
           $ref: '#/definitions/rclone-sync-hub_internal_model.UploadTask'
         type: array
+    type: object
+  rclone-sync-hub_internal_service.FileBrowseResult:
+    properties:
+      current_path:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_service.IndexedFileEntry'
+        type: array
+      page:
+        type: integer
+      page_size:
+        type: integer
+      parent_path:
+        type: string
+      total:
+        type: integer
+    type: object
+  rclone-sync-hub_internal_service.IndexedFileEntry:
+    properties:
+      error_message:
+        type: string
+      file_count:
+        type: integer
+      id:
+        type: integer
+      last_seen_at:
+        type: string
+      missing_at:
+        type: string
+      mod_time:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+      status:
+        type: string
+      task_id:
+        type: integer
+      task_progress:
+        type: number
+      type:
+        type: string
+      uploaded_at:
+        type: string
     type: object
   rclone-sync-hub_internal_service.OverviewVO:
     properties:
@@ -748,6 +880,227 @@ paths:
       summary: 获取 rclone remote 配置列表
       tags:
       - rclone
+  /api/remote-routes:
+    get:
+      parameters:
+      - description: 名称或远端路径关键词
+        in: query
+        name: keyword
+        type: string
+      - description: pending|scanning|ready|error|disabled
+        in: query
+        name: status
+        type: string
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 列出远端路由
+      tags:
+      - remote-routes
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 远端路由配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.RemoteRouteCreateReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_model.RemoteRoute'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建远端路由
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}:
+    delete:
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 删除远端路由
+      tags:
+      - remote-routes
+    get:
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_model.RemoteRoute'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取远端路由
+      tags:
+      - remote-routes
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 远端路由配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.RemoteRouteUpdateReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_model.RemoteRoute'
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 更新远端路由
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}/files:
+    get:
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 相对目录路径
+        in: query
+        name: path
+        type: string
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 100
+        description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_service.FileBrowseResult'
+      security:
+      - BearerAuth: []
+      summary: 浏览远端文件索引
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}/scan:
+    post:
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 立即扫描远端路由
+      tags:
+      - remote-routes
+  /api/remote-routes/scan:
+    post:
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 立即扫描全部远端路由
+      tags:
+      - remote-routes
   /api/scan:
     post:
       produces:
@@ -1394,6 +1747,46 @@ paths:
       security:
       - BearerAuth: []
       summary: 更新监听文件夹
+      tags:
+      - watch-folders
+  /api/watch-folders/{id}/files:
+    get:
+      parameters:
+      - description: 监控目录 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 相对目录路径
+        in: query
+        name: path
+        type: string
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 100
+        description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_service.FileBrowseResult'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 浏览监控目录文件索引
       tags:
       - watch-folders
 securityDefinitions:

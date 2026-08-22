@@ -23,6 +23,7 @@ type TaskRepository interface {
 	CountForList(status, keyword string) (int64, error)
 	CountByStatuses(ctx context.Context) (map[string]int64, error)
 	ListOpenByWatchFolder(ctx context.Context, watchFolderID uint) ([]model.UploadTask, error)
+	ListLatestByFileRecordIDs(ctx context.Context, fileRecordIDs []uint) ([]model.UploadTask, error)
 	CreateIfAbsent(ctx context.Context, task *model.UploadTask) (bool, error)
 	CreateManyIfAbsent(ctx context.Context, tasks []*model.UploadTask, batchSize int) (int64, error)
 	ClaimNext(ctx context.Context, owner string, leaseDuration time.Duration, maxAttempts int) (*model.UploadTask, error)
@@ -160,6 +161,19 @@ func (r *taskRepository) ListOpenByWatchFolder(ctx context.Context, watchFolderI
 		}).
 		Find(&list).Error
 	return list, err
+}
+
+func (r *taskRepository) ListLatestByFileRecordIDs(ctx context.Context, fileRecordIDs []uint) ([]model.UploadTask, error) {
+	if len(fileRecordIDs) == 0 {
+		return []model.UploadTask{}, nil
+	}
+	latestIDs := r.db.WithContext(ctx).Model(&model.UploadTask{}).
+		Select("MAX(id)").Where("file_record_id IN ?", fileRecordIDs).Group("file_record_id")
+	var tasks []model.UploadTask
+	if err := r.db.WithContext(ctx).Where("id IN (?)", latestIDs).Find(&tasks).Error; err != nil {
+		return nil, fmt.Errorf("task list latest by file records: %w", err)
+	}
+	return tasks, nil
 }
 
 // ClaimNext 使用 FOR UPDATE SKIP LOCKED 从 MySQL 原子领取一个到期任务。

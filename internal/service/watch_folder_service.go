@@ -24,19 +24,21 @@ type WatchFolderService interface {
 }
 
 type watchFolderService struct {
-	repo   repository.WatchFolderRepository
-	policy *security.ResourcePolicy
+	repo       repository.WatchFolderRepository
+	remoteRepo repository.RemoteRouteRepository
+	policy     *security.ResourcePolicy
 }
 
 // NewWatchFolderService 创建 WatchFolderService。
-func NewWatchFolderService(repo repository.WatchFolderRepository, policy *security.ResourcePolicy) WatchFolderService {
-	return &watchFolderService{repo: repo, policy: policy}
+func NewWatchFolderService(repo repository.WatchFolderRepository, remoteRepo repository.RemoteRouteRepository, policy *security.ResourcePolicy) WatchFolderService {
+	return &watchFolderService{repo: repo, remoteRepo: remoteRepo, policy: policy}
 }
 
 // CreateWatchFolderInput 创建监听文件夹的入参。
 type CreateWatchFolderInput struct {
 	Name               string
 	LocalPath          string
+	RemoteRouteID      uint
 	RemoteName         string
 	RemotePath         string
 	SyncType           string
@@ -49,6 +51,7 @@ type CreateWatchFolderInput struct {
 type UpdateWatchFolderInput struct {
 	Name               *string
 	LocalPath          *string
+	RemoteRouteID      *uint
 	RemoteName         *string
 	RemotePath         *string
 	SyncType           *string
@@ -67,7 +70,17 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 	if err != nil {
 		return nil, apperror.Validation("local directory is invalid, inaccessible, or outside the allowlist", err)
 	}
-	remotePath, err := s.policy.ValidateRemote(in.RemoteName, in.RemotePath)
+	remoteRouteID, remoteName, remotePath := in.RemoteRouteID, strings.TrimSpace(in.RemoteName), in.RemotePath
+	if remoteRouteID > 0 {
+		route, routeErr := s.remoteRepo.GetByID(ctx, remoteRouteID)
+		if routeErr != nil {
+			return nil, remoteRouteRepositoryError(routeErr)
+		}
+		remoteName, remotePath = route.RemoteName, route.RemotePath
+	} else if remoteName == "" || strings.TrimSpace(remotePath) == "" {
+		return nil, apperror.Validation("remote_route_id is required", nil)
+	}
+	remotePath, err = s.policy.ValidateRemote(remoteName, remotePath)
 	if err != nil {
 		return nil, apperror.Validation("remote destination is invalid or outside the allowlist", err)
 	}
@@ -98,7 +111,8 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 	f := &model.WatchFolder{
 		Name:                in.Name,
 		LocalPath:           localPath,
-		RemoteName:          in.RemoteName,
+		RemoteRouteID:       remoteRouteID,
+		RemoteName:          remoteName,
 		RemotePath:          remotePath,
 		SyncType:            syncType,
 		MaxDepth:            in.MaxDepth,
@@ -125,7 +139,8 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	if err != nil {
 		return nil, err
 	}
-	configurationChanged := in.Name != nil || in.LocalPath != nil || in.RemoteName != nil || in.RemotePath != nil || in.SyncType != nil || in.MaxDepth != nil || in.FilterKeywords != nil || in.ScanIntervalSecond != nil
+	previousRemoteRouteID, previousRemoteName, previousRemotePath := f.RemoteRouteID, f.RemoteName, f.RemotePath
+	configurationChanged := in.Name != nil || in.LocalPath != nil || in.RemoteRouteID != nil || in.RemoteName != nil || in.RemotePath != nil || in.SyncType != nil || in.MaxDepth != nil || in.FilterKeywords != nil || in.ScanIntervalSecond != nil
 	if f.Status == model.WatchFolderStatusDetecting && configurationChanged {
 		return nil, apperror.Conflict("watch folder configuration cannot change during an active scan", nil)
 	}
@@ -134,6 +149,20 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	}
 	if in.LocalPath != nil {
 		f.LocalPath = *in.LocalPath
+	}
+	if in.RemoteRouteID != nil {
+		if *in.RemoteRouteID == 0 {
+			return nil, apperror.Validation("remote_route_id is required", nil)
+		}
+		route, routeErr := s.remoteRepo.GetByID(ctx, *in.RemoteRouteID)
+		if routeErr != nil {
+			return nil, remoteRouteRepositoryError(routeErr)
+		}
+		f.RemoteRouteID = route.ID
+		f.RemoteName = route.RemoteName
+		f.RemotePath = route.RemotePath
+	} else if f.RemoteRouteID > 0 && (in.RemoteName != nil || in.RemotePath != nil) {
+		return nil, apperror.Validation("select a remote route instead of editing its destination", nil)
 	}
 	if in.RemoteName != nil {
 		f.RemoteName = *in.RemoteName
@@ -192,10 +221,11 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	}
 	f.LocalPath = localPath
 	f.RemotePath = remotePath
+	destinationChanged := previousRemoteRouteID != f.RemoteRouteID || previousRemoteName != f.RemoteName || previousRemotePath != f.RemotePath
 	if err := s.ensurePathDoesNotOverlap(ctx, id, localPath); err != nil {
 		return nil, err
 	}
-	if err := s.repo.Update(ctx, f, configurationChanged); err != nil {
+	if err := s.repo.Update(ctx, f, configurationChanged, destinationChanged); err != nil {
 		if errors.Is(err, repository.ErrConflict) {
 			return nil, apperror.Conflict("watch folder changed concurrently, is being scanned, overlaps another path, or already exists", err)
 		}

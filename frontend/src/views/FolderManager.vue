@@ -40,7 +40,7 @@
       <div v-if="loading" class="loading-layer"><div class="loading-indicator"><span class="spinner" />LOADING WATCH NODES</div></div>
       <div v-else-if="tableData.length" class="data-table-shell">
         <table class="data-table folders-table">
-          <thead><tr><th>目录节点</th><th>本地路径</th><th>远端目标</th><th>状态</th><th>扫描周期</th><th>最近扫描</th><th>文件 / 容量</th><th v-if="isAdmin">操作</th></tr></thead>
+          <thead><tr><th>目录节点</th><th>本地路径</th><th>远端目标</th><th>状态</th><th>扫描周期</th><th>最近扫描</th><th>文件 / 容量</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="row in tableData" :key="row.id">
               <td>
@@ -50,16 +50,15 @@
                 </div>
               </td>
               <td><span class="path-cell mono" :title="row.localPath">{{ row.localPath }}</span></td>
-              <td><div class="remote-cell"><span>{{ row.remoteName }}</span><small class="mono" :title="row.remotePath">{{ row.remotePath }}</small></div></td>
+              <td><div class="remote-cell"><span>{{ remoteRouteLabel(row) }}</span><small class="mono" :title="`${row.remoteName}:${row.remotePath}`">{{ row.remoteName }}:{{ row.remotePath }}</small></div></td>
               <td><StatusBadge :status="row.status" /><p v-if="row.lastError" class="row-error" :title="row.lastError">{{ row.lastError }}</p></td>
               <td><div class="cycle-cell"><strong class="mono">{{ formatDuration(row.scanIntervalSeconds) }}</strong><small>DEPTH {{ row.maxDepth || '∞' }}</small></div></td>
               <td><div class="date-cell"><strong>{{ formatDateTime(row.lastScanAt) }}</strong><small v-if="row.lastScanDurationMs">耗时 {{ formatMilliseconds(row.lastScanDurationMs) }}</small></div></td>
               <td><div class="capacity-cell"><strong class="mono">{{ number(row.totalFileCount) }} files</strong><small>{{ formatBytes(row.totalFileSize) }}</small></div></td>
-              <td v-if="isAdmin">
+              <td>
                 <div class="row-actions">
-                  <button class="icon-button" type="button" title="编辑" @click="openEdit(row)"><UiIcon name="edit" :size="15" /></button>
-                  <button class="icon-button" type="button" :title="row.status === 'paused' ? '启动' : '暂停'" @click="handleToggleStatus(row)"><UiIcon :name="row.status === 'paused' ? 'play' : 'pause'" :size="15" /></button>
-                  <button class="icon-button danger-action" type="button" title="删除" @click="handleDelete(row)"><UiIcon name="trash" :size="15" /></button>
+                  <button class="icon-button" type="button" title="查看已扫描文件" @click="openFileBrowser(row)"><UiIcon name="eye" :size="15" /></button>
+                  <template v-if="isAdmin"><button class="icon-button" type="button" title="编辑" @click="openEdit(row)"><UiIcon name="edit" :size="15" /></button><button class="icon-button" type="button" :title="row.status === 'paused' ? '启动' : '暂停'" @click="handleToggleStatus(row)"><UiIcon :name="row.status === 'paused' ? 'play' : 'pause'" :size="15" /></button><button class="icon-button danger-action" type="button" title="删除" @click="handleDelete(row)"><UiIcon name="trash" :size="15" /></button></template>
                 </div>
               </td>
             </tr>
@@ -95,10 +94,11 @@
             <section class="form-section">
               <div class="form-section__heading"><span>02</span><div><strong>远端路由</strong><small>REMOTE ROUTING</small></div></div>
               <div class="form-grid">
-                <div class="field"><label for="remote-name">Rclone Remote *</label><select id="remote-name" v-model="form.remote_name" class="ui-control"><option value="" disabled>{{ remoteLoading ? '加载中...' : '选择 Remote' }}</option><option v-for="option in remoteOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></div>
+                <div class="field"><label for="remote-route">远端路由 *</label><select id="remote-route" v-model.number="form.remote_route_id" class="ui-control"><option value="" disabled>{{ remoteLoading ? '加载中...' : '选择已配置路由' }}</option><option v-for="option in remoteOptions" :key="option.id" :value="option.id">{{ option.name }} · {{ option.remoteName }}:{{ option.remotePath }}{{ option.enabled ? '' : '（后台扫描已关闭）' }}</option></select></div>
                 <div class="field"><label for="sync-type">同步方向</label><select id="sync-type" v-model="form.sync_type" class="ui-control"><option value="local_to_remote">本地 → 远端</option></select></div>
               </div>
-              <div class="field"><label for="remote-path">远端存储路径 *</label><input id="remote-path" v-model="form.remote_path" class="ui-control mono" placeholder="backup/videos" /></div>
+              <p v-if="selectedFormRoute" class="selected-route"><UiIcon name="database" :size="15" /><span><strong>{{ selectedFormRoute.name }}</strong><small class="mono">{{ selectedFormRoute.remoteName }}:{{ selectedFormRoute.remotePath }}</small></span></p>
+              <p v-else class="field-help route-help">请先在“远端路由”模块创建目标，再在这里选择。</p>
             </section>
 
             <section class="form-section">
@@ -123,7 +123,7 @@
         <div v-if="pathSelectorVisible" class="path-modal-layer" @click.self="pathSelectorVisible = false">
           <section class="path-modal" role="dialog" aria-modal="true" aria-labelledby="path-modal-title">
             <header><div><span class="eyebrow">LOCAL FILESYSTEM</span><h2 id="path-modal-title">选择本地目录</h2></div><button class="icon-button" type="button" aria-label="关闭" @click="pathSelectorVisible = false"><UiIcon name="close" :size="18" /></button></header>
-            <div class="path-modal__current"><UiIcon name="folder" :size="16" /><input v-model="browsePath" class="ui-control mono" aria-label="当前路径" @keyup.enter="loadBrowsePath(browsePath)" /><button class="ui-button is-small" type="button" @click="loadBrowsePath(browsePath)">打开</button></div>
+            <div class="path-modal__current"><button class="icon-button" type="button" title="返回上一层" aria-label="返回上一层" :disabled="!browseParentPath || pathTreeLoading" @click="loadBrowsePath(browseParentPath)"><UiIcon name="arrowLeft" :size="16" /></button><input v-model="browsePath" class="ui-control mono" aria-label="当前路径" @keyup.enter="loadBrowsePath(browsePath)" /><button class="ui-button is-small" type="button" @click="loadBrowsePath(browsePath)">打开</button></div>
             <div class="path-browser">
               <div v-if="pathTreeLoading" class="loading-layer"><div class="loading-indicator"><span class="spinner" />READING FILESYSTEM</div></div>
               <template v-else-if="browseItems.length">
@@ -140,6 +140,8 @@
         </div>
       </Transition>
     </Teleport>
+
+    <IndexedFileBrowser :visible="fileBrowserVisible" :title="`${selectedFolder?.name || ''} · 已扫描文件`" :subtitle="selectedFolder?.localPath || ''" :loader="loadSelectedFolderFiles" @close="fileBrowserVisible = false" />
   </div>
 </template>
 
@@ -148,9 +150,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import UiIcon from '../components/UiIcon.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import PaginationBar from '../components/PaginationBar.vue';
-import { fetchWatchFolders, createWatchFolder, updateWatchFolder, deleteWatchFolder } from '../api/watchFolders';
+import IndexedFileBrowser from '../components/IndexedFileBrowser.vue';
+import { fetchWatchFolders, createWatchFolder, updateWatchFolder, deleteWatchFolder, fetchWatchFolderFiles } from '../api/watchFolders';
 import { fetchSubdirs } from '../api/fs';
-import { fetchRcloneConfigs } from '../api/rclone';
+import { fetchRemoteRoutes } from '../api/remoteRoutes';
 import { currentUser } from '../api/auth';
 import { triggerScan } from '../api/scanner';
 import { confirmDialog, errorText, toast } from '../composables/useUi';
@@ -168,7 +171,10 @@ const remoteLoading = ref(false);
 const pathSelectorVisible = ref(false);
 const pathTreeLoading = ref(false);
 const browsePath = ref('/volumes');
+const browseParentPath = ref('');
 const browseItems = ref([]);
+const fileBrowserVisible = ref(false);
+const selectedFolder = ref(null);
 
 const statusOptions = [
   { label: '扫描中', value: 'detecting' }, { label: '监控中', value: 'watching' },
@@ -181,15 +187,17 @@ const form = reactive(defaultForm());
 const watchingCount = computed(() => tableData.value.filter((row) => row.status === 'watching').length);
 const detectingCount = computed(() => tableData.value.filter((row) => row.status === 'detecting').length);
 const errorCount = computed(() => tableData.value.filter((row) => row.status === 'error').length);
+const selectedFormRoute = computed(() => remoteOptions.value.find((route) => route.id === Number(form.remote_route_id)) || null);
 
 function defaultForm() {
-  return { name: '', local_path: '', remote_name: '', remote_path: '', max_depth: 5, filter_keywords: '', scan_interval_seconds: 300, sync_type: 'local_to_remote' };
+  return { name: '', local_path: '', remote_route_id: '', max_depth: 5, filter_keywords: '', scan_interval_seconds: 300, sync_type: 'local_to_remote' };
 }
 function pick(item, ...keys) { for (const key of keys) if (item?.[key] !== undefined && item?.[key] !== null) return item[key]; return undefined; }
 function normalizeRow(item) {
   return {
     ...item,
     id: pick(item, 'ID', 'id'), name: pick(item, 'Name', 'name') || '未命名目录',
+    remoteRouteId: Number(pick(item, 'RemoteRouteID', 'remote_route_id') || 0),
     localPath: pick(item, 'LocalPath', 'local_path') || '-', remoteName: pick(item, 'RemoteName', 'remote_name') || '-', remotePath: pick(item, 'RemotePath', 'remote_path') || '-',
     status: pick(item, 'Status', 'status') || 'stopped', maxDepth: Number(pick(item, 'MaxDepth', 'max_depth') || 0), filterKeywords: pick(item, 'FilterKeywords', 'filter_keywords') || '',
     scanIntervalSeconds: Number(pick(item, 'ScanIntervalSeconds', 'scan_interval_seconds') || 300), syncType: pick(item, 'SyncType', 'sync_type') || 'local_to_remote',
@@ -238,13 +246,13 @@ async function handleDelete(row) {
   catch (error) { toast(errorText(error, '删除失败'), 'error'); }
 }
 function openCreate() { drawerMode.value = 'create'; editingId.value = null; Object.assign(form, defaultForm()); drawerVisible.value = true; }
-function openEdit(row) { drawerMode.value = 'edit'; editingId.value = row.id; Object.assign(form, { name: row.name, local_path: row.localPath, remote_name: row.remoteName, remote_path: row.remotePath, max_depth: row.maxDepth, filter_keywords: row.filterKeywords, scan_interval_seconds: row.scanIntervalSeconds, sync_type: row.syncType }); drawerVisible.value = true; }
+function openEdit(row) { drawerMode.value = 'edit'; editingId.value = row.id; Object.assign(form, { name: row.name, local_path: row.localPath, remote_route_id: row.remoteRouteId || '', max_depth: row.maxDepth, filter_keywords: row.filterKeywords, scan_interval_seconds: row.scanIntervalSeconds, sync_type: row.syncType }); drawerVisible.value = true; }
 function closeDrawer() { if (!saving.value) drawerVisible.value = false; }
 function normalizeKeywords(value) { return String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join('\n'); }
 async function handleSubmit() {
-  if (!form.name.trim() || !form.local_path.trim() || !form.remote_name || !form.remote_path.trim()) { toast('请填写名称、本地路径、Remote 和远端路径', 'warning'); return; }
+  if (!form.name.trim() || !form.local_path.trim() || !Number(form.remote_route_id)) { toast('请填写名称、本地路径并选择远端路由', 'warning'); return; }
   if (Number(form.scan_interval_seconds) < 60) { toast('扫描周期不能小于 60 秒', 'warning'); return; }
-  const payload = { name: form.name.trim(), local_path: form.local_path.trim(), remote_name: form.remote_name, remote_path: form.remote_path.trim(), max_depth: Number(form.max_depth) || 0, filter_keywords: normalizeKeywords(form.filter_keywords), scan_interval_seconds: Number(form.scan_interval_seconds) || 300, sync_type: form.sync_type };
+  const payload = { name: form.name.trim(), local_path: form.local_path.trim(), remote_route_id: Number(form.remote_route_id), max_depth: Number(form.max_depth) || 0, filter_keywords: normalizeKeywords(form.filter_keywords), scan_interval_seconds: Number(form.scan_interval_seconds) || 300, sync_type: form.sync_type };
   saving.value = true;
   try { if (drawerMode.value === 'create') await createWatchFolder(payload); else await updateWatchFolder(editingId.value, payload); toast('监控目录已保存', 'success'); drawerVisible.value = false; await loadData(); }
   catch (error) { toast(errorText(error, '保存失败'), 'error'); }
@@ -252,18 +260,21 @@ async function handleSubmit() {
 }
 async function loadRemoteOptions() {
   remoteLoading.value = true;
-  try { const result = await fetchRcloneConfigs(); remoteOptions.value = (result.items || []).map((item) => ({ label: item.name, value: item.name })); }
-  catch (error) { remoteOptions.value = []; toast(errorText(error, 'Remote 列表加载失败'), 'warning'); }
+  try { const result = await fetchRemoteRoutes({ page: 1, page_size: 500 }); remoteOptions.value = (result.items || []).map((item) => ({ id: Number(pick(item, 'ID', 'id')), name: pick(item, 'Name', 'name') || '未命名路由', remoteName: pick(item, 'RemoteName', 'remote_name') || '-', remotePath: pick(item, 'RemotePath', 'remote_path') || '-', enabled: Boolean(pick(item, 'Enabled', 'enabled')) })); }
+  catch (error) { remoteOptions.value = []; toast(errorText(error, '远端路由列表加载失败'), 'warning'); }
   finally { remoteLoading.value = false; }
 }
 async function openPathSelector() { browsePath.value = form.local_path || '/volumes'; pathSelectorVisible.value = true; await loadBrowsePath(browsePath.value); }
 async function loadBrowsePath(path) {
   pathTreeLoading.value = true;
-  try { const result = await fetchSubdirs(path); browsePath.value = path; browseItems.value = result.items || []; }
-  catch (error) { browseItems.value = []; toast(errorText(error, '目录读取失败'), 'error'); }
+  try { const result = await fetchSubdirs(path); browsePath.value = result.current_path || path; browseParentPath.value = result.parent_path || ''; browseItems.value = result.items || []; }
+  catch (error) { browseItems.value = []; browseParentPath.value = ''; toast(errorText(error, '目录读取失败'), 'error'); }
   finally { pathTreeLoading.value = false; }
 }
 function selectPath(path) { form.local_path = path; pathSelectorVisible.value = false; }
+function remoteRouteLabel(row) { return remoteOptions.value.find((route) => route.id === row.remoteRouteId)?.name || row.remoteName; }
+function openFileBrowser(row) { selectedFolder.value = row; fileBrowserVisible.value = true; }
+function loadSelectedFolderFiles(path, page, pageSize) { return fetchWatchFolderFiles(selectedFolder.value.id, { path, page, page_size: pageSize }); }
 function handleKeydown(event) { if (event.key !== 'Escape') return; if (pathSelectorVisible.value) pathSelectorVisible.value = false; else closeDrawer(); }
 
 onMounted(() => { loadData(); loadRemoteOptions(); window.addEventListener('keydown', handleKeydown); });
@@ -278,7 +289,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
 .folders-table { min-width: 1220px; }.folder-node { display: flex; align-items: center; gap: 10px; min-width: 150px; }.folder-node__icon { width: 36px; height: 36px; display: grid; place-items: center; color: var(--cyan); border: 1px solid rgba(88,224,255,.14); border-radius: 11px; background: rgba(88,224,255,.06); }.folder-node strong,.folder-node small { display: block; }.folder-node strong { max-width: 150px; overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }.folder-node small { margin-top: 4px; color: #455265; font: 500 8px var(--font-mono); }.path-cell { max-width: 230px; display: block; overflow: hidden; color: #8391a4; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.remote-cell span,.remote-cell small,.cycle-cell strong,.cycle-cell small,.date-cell strong,.date-cell small,.capacity-cell strong,.capacity-cell small { display: block; }.remote-cell span { color: var(--violet); font: 600 10px var(--font-mono); }.remote-cell small { max-width: 190px; margin-top: 4px; overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.cycle-cell small,.date-cell small,.capacity-cell small { margin-top: 4px; color: #4e5a6d; font-size: 8px; }.date-cell strong { color: #9ba8b8; font-size: 10px; font-weight: 500; }.row-error { max-width: 130px; margin: 5px 0 0; overflow: hidden; color: #8b5d66; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }.danger-action:hover { color: var(--red)!important; border-color: rgba(255,98,125,.25)!important; background: rgba(255,98,125,.07)!important; }
 .folders-table th:last-child,.folders-table td:last-child{position:sticky;right:0;z-index:2;background:#0e1520;box-shadow:-12px 0 24px rgba(4,7,12,.72)}.folders-table th:last-child{z-index:3;background:#0b111a}.folders-table tr:hover td:last-child{background:#111b27}
 .folder-form { display: flex; flex-direction: column; gap: 20px; }.form-section { padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.018); }.form-section__heading { display: flex; align-items: center; gap: 10px; margin-bottom: 19px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }.form-section__heading > span { width: 30px; height: 30px; display: grid; place-items: center; color: var(--cyan); border: 1px solid rgba(88,224,255,.17); border-radius: 9px; background: rgba(88,224,255,.06); font: 600 9px var(--font-mono); }.form-section__heading strong,.form-section__heading small { display: block; }.form-section__heading strong { color: var(--text-strong); font-size: 12px; }.form-section__heading small { margin-top: 3px; color: #4c586a; font: 500 8px var(--font-mono); letter-spacing: .08em; }.form-section .field + .field { margin-top: 16px; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }.form-grid + .field { margin-top: 16px; }
-.path-modal-layer { position: fixed; inset: 0; z-index: 220; display: grid; place-items: center; padding: 20px; background: rgba(1,4,8,.78); backdrop-filter: blur(8px); }.path-modal { width: min(760px,100%); max-height: min(760px,90vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 19px; background: #0e1520; box-shadow: 0 35px 100px rgba(0,0,0,.58); }.path-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 21px 23px; border-bottom: 1px solid var(--line); }.path-modal h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 18px; }.path-modal__current { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: rgba(4,8,14,.4); }.path-modal__current > .ui-icon { color: var(--cyan); }.path-modal__current .ui-control { height: 37px; }.path-browser { min-height: 310px; flex: 1; overflow: auto; padding: 10px; }.path-entry { width: 100%; display: grid; grid-template-columns: 38px minmax(0,1fr) 34px auto; align-items: center; gap: 10px; padding: 10px; color: inherit; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; }.path-entry:hover { border-color: var(--line); background: rgba(88,224,255,.035); }.path-entry > span { width: 36px; height: 36px; display: grid; place-items: center; color: var(--cyan); border-radius: 10px; background: rgba(88,224,255,.06); }.path-entry strong,.path-entry small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.path-entry strong { color: var(--text); font-size: 11px; }.path-entry small { margin-top: 3px; color: #536075; font-size: 8px; }.path-modal > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 20px; border-top: 1px solid var(--line); }.path-modal > footer > span { max-width: 45%; overflow: hidden; color: #657287; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.path-modal > footer > div { display: flex; gap: 8px; }
+.selected-route { display:flex;align-items:center;gap:10px;margin:16px 0 0;padding:12px;color:var(--violet);border:1px solid rgba(140,118,255,.18);border-radius:11px;background:rgba(140,118,255,.06) }.selected-route strong,.selected-route small{display:block}.selected-route strong{color:var(--text-strong);font-size:11px}.selected-route small{margin-top:3px;color:var(--text-muted);font-size:9px}.route-help{margin-top:14px}
+.path-modal-layer { position: fixed; inset: 0; z-index: 220; display: grid; place-items: center; padding: 20px; background: rgba(1,4,8,.78); backdrop-filter: blur(8px); }.path-modal { width: min(760px,100%); max-height: min(760px,90vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 19px; background: #0e1520; box-shadow: 0 35px 100px rgba(0,0,0,.58); }.path-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 21px 23px; border-bottom: 1px solid var(--line); }.path-modal h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 18px; }.path-modal__current { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: rgba(4,8,14,.4); }.path-modal__current .icon-button { color: var(--cyan); }.path-modal__current .ui-control { height: 37px; }.path-browser { min-height: 310px; flex: 1; overflow: auto; padding: 10px; }.path-entry { width: 100%; display: grid; grid-template-columns: 38px minmax(0,1fr) 34px auto; align-items: center; gap: 10px; padding: 10px; color: inherit; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; }.path-entry:hover { border-color: var(--line); background: rgba(88,224,255,.035); }.path-entry > span { width: 36px; height: 36px; display: grid; place-items: center; color: var(--cyan); border-radius: 10px; background: rgba(88,224,255,.06); }.path-entry strong,.path-entry small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.path-entry strong { color: var(--text); font-size: 11px; }.path-entry small { margin-top: 3px; color: #536075; font-size: 8px; }.path-modal > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 20px; border-top: 1px solid var(--line); }.path-modal > footer > span { max-width: 45%; overflow: hidden; color: #657287; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.path-modal > footer > div { display: flex; gap: 8px; }
 @media (max-width: 1120px) { .folder-summary { grid-template-columns: repeat(4,1fr); }.summary-sequence { display: none; }.folder-toolbar { align-items: flex-start; flex-direction: column; }.folder-filters { width: 100%; }.folder-filters .search-field { flex: 1; } }
 @media (max-width: 700px) { .folder-summary { grid-template-columns: repeat(2,1fr); }.folder-summary > div:nth-child(2) { border-right: 0; }.folder-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.folder-filters { align-items: stretch; flex-wrap: wrap; }.folder-filters .compact-select,.folder-filters .search-field { width: 100%; min-width: 100%; }.form-grid { grid-template-columns: 1fr; }.path-entry { grid-template-columns: 36px minmax(0,1fr) auto; }.path-entry > .icon-button { display: none; }.path-modal > footer { align-items: stretch; flex-direction: column; }.path-modal > footer > span { max-width: 100%; }.path-modal > footer > div { justify-content: flex-end; } }
 </style>

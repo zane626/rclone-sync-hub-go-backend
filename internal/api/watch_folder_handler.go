@@ -25,8 +25,9 @@ func NewWatchFolderHandler(svc service.WatchFolderService) *WatchFolderHandler {
 type WatchFolderCreateReq struct {
 	Name               string `json:"name" binding:"required"`
 	LocalPath          string `json:"local_path" binding:"required"`
-	RemoteName         string `json:"remote_name" binding:"required"`
-	RemotePath         string `json:"remote_path" binding:"required"`
+	RemoteRouteID      uint   `json:"remote_route_id"`
+	RemoteName         string `json:"remote_name"`
+	RemotePath         string `json:"remote_path"`
 	SyncType           string `json:"sync_type"`             // 可选，默认 local_to_remote
 	MaxDepth           int    `json:"max_depth"`             // 可选，0 表示不限制
 	FilterKeywords     string `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
@@ -37,6 +38,7 @@ type WatchFolderCreateReq struct {
 type WatchFolderUpdateReq struct {
 	Name               *string `json:"name"`
 	LocalPath          *string `json:"local_path"`
+	RemoteRouteID      *uint   `json:"remote_route_id"`
 	RemoteName         *string `json:"remote_name"`
 	RemotePath         *string `json:"remote_path"`
 	SyncType           *string `json:"sync_type"`
@@ -73,6 +75,7 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 	in := service.CreateWatchFolderInput{
 		Name:               req.Name,
 		LocalPath:          req.LocalPath,
+		RemoteRouteID:      req.RemoteRouteID,
 		RemoteName:         req.RemoteName,
 		RemotePath:         req.RemotePath,
 		SyncType:           req.SyncType,
@@ -190,6 +193,7 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 	in := service.UpdateWatchFolderInput{
 		Name:               req.Name,
 		LocalPath:          req.LocalPath,
+		RemoteRouteID:      req.RemoteRouteID,
 		RemoteName:         req.RemoteName,
 		RemotePath:         req.RemotePath,
 		SyncType:           req.SyncType,

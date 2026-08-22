@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"rclone-sync-hub/internal/model"
@@ -93,7 +95,60 @@ func DefaultMigrations() []Migration {
 				})
 			},
 		},
+		{
+			Version: 4,
+			Name:    "remote routes and persisted remote file index",
+			Up: func(db *gorm.DB) error {
+				if err := db.AutoMigrate(&model.RemoteRoute{}, &model.RemoteFileRecord{}, &model.WatchFolder{}); err != nil {
+					return err
+				}
+				return backfillRemoteRoutes(db)
+			},
+		},
 	}
+}
+
+func backfillRemoteRoutes(db *gorm.DB) error {
+	var folders []model.WatchFolder
+	if err := db.Where("remote_route_id = 0").Find(&folders).Error; err != nil {
+		return fmt.Errorf("list watch folders without remote route: %w", err)
+	}
+	for i := range folders {
+		remoteName := strings.TrimSpace(folders[i].RemoteName)
+		remotePath := strings.TrimSpace(folders[i].RemotePath)
+		if remoteName == "" || remotePath == "" {
+			continue
+		}
+		routeKey := remoteRouteKey(remoteName, remotePath)
+		var route model.RemoteRoute
+		err := db.Where("route_key = ?", routeKey).First(&route).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			now := time.Now()
+			labelRunes := []rune(strings.TrimSpace(remoteName + ":" + remotePath))
+			if len(labelRunes) > 220 {
+				labelRunes = labelRunes[:220]
+			}
+			route = model.RemoteRoute{
+				Name: string(labelRunes) + " · " + routeKey[:10], RouteKey: routeKey,
+				RemoteName: remoteName, RemotePath: remotePath, Enabled: true,
+				Status: model.RemoteRouteStatusPending, ScanIntervalSeconds: 3600, NextScanAt: &now,
+			}
+			if err := db.Create(&route).Error; err != nil {
+				return fmt.Errorf("create migrated remote route: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("find migrated remote route: %w", err)
+		}
+		if err := db.Model(&model.WatchFolder{}).Where("id = ? AND remote_route_id = 0", folders[i].ID).Update("remote_route_id", route.ID).Error; err != nil {
+			return fmt.Errorf("attach watch folder %d to remote route: %w", folders[i].ID, err)
+		}
+	}
+	return nil
+}
+
+func remoteRouteKey(remoteName, remotePath string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(remoteName) + "\x00" + strings.TrimSpace(remotePath)))
+	return fmt.Sprintf("%x", sum)
 }
 
 type modelIndexes struct {

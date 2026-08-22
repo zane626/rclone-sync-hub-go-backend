@@ -16,7 +16,7 @@ import (
 type WatchFolderRepository interface {
 	Create(f *model.WatchFolder) error
 	GetByID(id uint) (*model.WatchFolder, error)
-	Update(ctx context.Context, f *model.WatchFolder, requireIdle bool) error
+	Update(ctx context.Context, f *model.WatchFolder, requireIdle, destinationChanged bool) error
 	Delete(ctx context.Context, id uint) error
 	// List 按状态分页查询，status 为空则不过滤；keyword 非空时对 name/local_path/remote_name/remote_path 模糊查询。
 	List(status, keyword string, offset, limit int) ([]model.WatchFolder, int64, error)
@@ -92,8 +92,12 @@ func (r *watchFolderRepository) GetByID(id uint) (*model.WatchFolder, error) {
 	return &f, nil
 }
 
-func (r *watchFolderRepository) Update(ctx context.Context, f *model.WatchFolder, requireIdle bool) error {
-	query := r.db.WithContext(ctx).Model(&model.WatchFolder{}).Where("id = ?", f.ID)
+func (r *watchFolderRepository) Update(ctx context.Context, f *model.WatchFolder, requireIdle, destinationChanged bool) error {
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	query := tx.Model(&model.WatchFolder{}).Where("id = ?", f.ID)
 	if !f.UpdatedAt.IsZero() {
 		query = query.Where("updated_at = ?", f.UpdatedAt)
 	}
@@ -103,6 +107,7 @@ func (r *watchFolderRepository) Update(ctx context.Context, f *model.WatchFolder
 	result := query.Updates(map[string]interface{}{
 		"name":                  f.Name,
 		"local_path":            f.LocalPath,
+		"remote_route_id":       f.RemoteRouteID,
 		"remote_name":           f.RemoteName,
 		"remote_path":           f.RemotePath,
 		"sync_type":             f.SyncType,
@@ -114,17 +119,43 @@ func (r *watchFolderRepository) Update(ctx context.Context, f *model.WatchFolder
 		"next_scan_at":          nil,
 	})
 	if result.Error != nil {
+		tx.Rollback()
 		return fmt.Errorf("watch_folder update: %w", classifyConstraintError(result.Error))
 	}
 	if result.RowsAffected == 0 {
 		var count int64
-		if err := r.db.WithContext(ctx).Model(&model.WatchFolder{}).Where("id = ?", f.ID).Count(&count).Error; err != nil {
+		if err := tx.Model(&model.WatchFolder{}).Where("id = ?", f.ID).Count(&count).Error; err != nil {
+			tx.Rollback()
 			return fmt.Errorf("watch_folder verify update: %w", err)
 		}
+		tx.Rollback()
 		if count == 0 {
 			return fmt.Errorf("watch folder %d: %w", f.ID, ErrNotFound)
 		}
 		return fmt.Errorf("watch folder %d changed concurrently or is being scanned: %w", f.ID, ErrConflict)
+	}
+	if destinationChanged {
+		now := time.Now()
+		if err := tx.Model(&model.FileRecord{}).Where("watch_folder_id = ?", f.ID).Update("uploaded_at", nil).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("watch_folder reset file destinations: %w", err)
+		}
+		if err := tx.Model(&model.UploadTask{}).Where("watch_folder_id = ? AND status = ?", f.ID, model.TaskStatusRunning).
+			Updates(map[string]interface{}{"cancel_requested_at": now, "last_status_at": now}).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("watch_folder cancel running tasks after destination change: %w", err)
+		}
+		if err := tx.Model(&model.UploadTask{}).Where("watch_folder_id = ? AND status IN ?", f.ID, []string{model.TaskStatusPending, model.TaskStatusPaused, model.TaskStatusFailed}).
+			Updates(map[string]interface{}{
+				"status": model.TaskStatusCanceled, "error_message": "watch folder remote route changed", "finished_at": now,
+				"canceled_at": now, "last_status_at": now, "next_retry_at": nil, "cancel_requested_at": nil,
+			}).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("watch_folder cancel queued tasks after destination change: %w", err)
+		}
+	}
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("watch_folder update commit: %w", err)
 	}
 	return nil
 }

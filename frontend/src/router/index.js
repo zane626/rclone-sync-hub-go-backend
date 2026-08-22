@@ -1,5 +1,6 @@
 const Dashboard = () => import('../views/Dashboard.vue');
 const FolderManager = () => import('../views/FolderManager.vue');
+const RemoteRoutes = () => import('../views/RemoteRoutes.vue');
 const TaskList = () => import('../views/TaskList.vue');
 const OperationsCenter = () => import('../views/OperationsCenter.vue');
 const Login = () => import('../views/Login.vue');
@@ -32,6 +33,12 @@ const routes = [
     name: 'TaskList',
     component: TaskList,
     meta: { title: '任务中心' }
+  },
+  {
+    path: '/remote-routes',
+    name: 'RemoteRoutes',
+    component: RemoteRoutes,
+    meta: { title: '远端路由' }
   },
   {
     path: '/operations',

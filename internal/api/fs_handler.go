@@ -27,7 +27,9 @@ type FSSubDir struct {
 
 // FSSubDirListResponse 返回结构。
 type FSSubDirListResponse struct {
-	Items []FSSubDir `json:"items"`
+	CurrentPath string     `json:"current_path"`
+	ParentPath  string     `json:"parent_path,omitempty"`
+	Items       []FSSubDir `json:"items"`
 }
 
 // ListSubDirs 获取某个路径下的所有子目录（仅一层）。
@@ -47,18 +49,18 @@ func (h *FSHandler) ListSubDirs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "path is required"})
 		return
 	}
-	dirs, err := h.svc.ListSubDirs(c.Request.Context(), path)
+	listing, err := h.svc.ListSubDirs(c.Request.Context(), path)
 	if err != nil {
 		writeAPIError(c, err)
 		return
 	}
-	items := make([]FSSubDir, 0, len(dirs))
-	for _, d := range dirs {
+	items := make([]FSSubDir, 0, len(listing.Items))
+	for _, d := range listing.Items {
 		items = append(items, FSSubDir{
 			Name:       d.Name,
 			Path:       d.Path,
 			HasSubDirs: d.HasSubDirs,
 		})
 	}
-	c.JSON(http.StatusOK, FSSubDirListResponse{Items: items})
+	c.JSON(http.StatusOK, FSSubDirListResponse{CurrentPath: listing.CurrentPath, ParentPath: listing.ParentPath, Items: items})
 }

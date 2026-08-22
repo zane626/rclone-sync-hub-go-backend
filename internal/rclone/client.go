@@ -5,6 +5,8 @@ package rclone
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Progress 单次进度快照。兼容 rclone 两种输出：数字格式与 "Transferred: ..." 格式。
@@ -39,12 +42,25 @@ type Remote struct {
 	Type string `json:"type"`
 }
 
+// RemoteObject is one non-sensitive lsjson entry.
+type RemoteObject struct {
+	Path     string    `json:"Path"`
+	Name     string    `json:"Name"`
+	Size     int64     `json:"Size"`
+	MimeType string    `json:"MimeType"`
+	ModTime  time.Time `json:"ModTime"`
+	IsDir    bool      `json:"IsDir"`
+}
+
 // Client 封装 rclone 命令行调用。
 type Client interface {
 	// Copy 使用 copyto 将一个本地文件上传到精确的远端文件路径。
 	Copy(ctx context.Context, localPath, remoteName, remotePath string, onProgress func(Progress)) (Result, error)
 	// ListRemotes 返回 rclone config 中配置的 remote 列表，仅包含 name 与 type 等非敏感信息。
 	ListRemotes(ctx context.Context) ([]Remote, error)
+	// WalkRemote streams every file and directory below one route. Streaming
+	// avoids buffering a potentially very large remote listing in memory.
+	WalkRemote(ctx context.Context, remoteName, remotePath string, visit func(RemoteObject) error) error
 }
 
 type client struct {
@@ -229,6 +245,80 @@ func (c *client) ListRemotes(ctx context.Context) ([]Remote, error) {
 		return nil, fmt.Errorf("rclone listremotes: %w", err)
 	}
 	return parseListRemotesLong(string(out)), nil
+}
+
+func (c *client) WalkRemote(ctx context.Context, remoteName, remotePath string, visit func(RemoteObject) error) error {
+	listCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	destination := fmt.Sprintf("%s:%s", remoteName, strings.TrimPrefix(remotePath, "/"))
+	cmd := exec.CommandContext(listCtx, c.binPath, "lsjson", destination, "--recursive")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("rclone lsjson stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("rclone lsjson stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("rclone lsjson start: %w", err)
+	}
+	diagnostics := cappedBuffer{max: 64 * 1024}
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			diagnostics.Append(scanner.Text() + "\n")
+		}
+		if scanErr := scanner.Err(); scanErr != nil {
+			diagnostics.Append("read rclone lsjson stderr: " + scanErr.Error())
+		}
+	}()
+
+	decoder := json.NewDecoder(stdout)
+	var walkErr error
+	opening, tokenErr := decoder.Token()
+	if tokenErr != nil {
+		walkErr = fmt.Errorf("decode rclone lsjson opening token: %w", tokenErr)
+	} else if delimiter, ok := opening.(json.Delim); !ok || delimiter != '[' {
+		walkErr = errors.New("rclone lsjson returned a non-array response")
+	}
+	for walkErr == nil && decoder.More() {
+		var object RemoteObject
+		if err := decoder.Decode(&object); err != nil {
+			walkErr = fmt.Errorf("decode rclone lsjson entry: %w", err)
+			break
+		}
+		if visit != nil {
+			if err := visit(object); err != nil {
+				walkErr = err
+				break
+			}
+		}
+	}
+	if walkErr == nil {
+		if _, err := decoder.Token(); err != nil {
+			walkErr = fmt.Errorf("decode rclone lsjson closing token: %w", err)
+		}
+	}
+	if walkErr != nil {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	<-stderrDone
+	if walkErr != nil {
+		return walkErr
+	}
+	if waitErr != nil {
+		message := strings.TrimSpace(diagnostics.String())
+		if message == "" {
+			message = waitErr.Error()
+		}
+		return fmt.Errorf("rclone lsjson: %s", message)
+	}
+	return nil
 }
 
 func parseListRemotesLong(text string) []Remote {

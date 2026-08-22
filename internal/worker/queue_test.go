@@ -301,3 +301,7 @@ func (c *fakeRcloneClient) Copy(ctx context.Context, _, _, _ string, onProgress 
 func (c *fakeRcloneClient) ListRemotes(context.Context) ([]rclone.Remote, error) {
 	return nil, nil
 }
+
+func (c *fakeRcloneClient) WalkRemote(context.Context, string, string, func(rclone.RemoteObject) error) error {
+	return nil
+}

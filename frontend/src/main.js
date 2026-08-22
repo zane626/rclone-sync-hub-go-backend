@@ -4,7 +4,9 @@ import App from './App.vue';
 import routes from './router';
 import './assets/styles/global.css';
 import { getAuthConfig, hasToken } from './api/auth';
+import { initializeTheme } from './composables/useTheme';
 
+initializeTheme();
 const app = createApp(App);
 const router = createRouter({ history: createWebHashHistory(), routes });
 

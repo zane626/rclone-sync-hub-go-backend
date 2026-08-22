@@ -18,3 +18,7 @@ export function deleteWatchFolder(id) {
   return http.delete(`/api/watch-folders/${id}`).then((res) => res.data);
 }
 
+export function fetchWatchFolderFiles(id, params) {
+  return http.get(`/api/watch-folders/${id}/files`, { params }).then((res) => res.data);
+}
+

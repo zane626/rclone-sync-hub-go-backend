@@ -25,6 +25,7 @@ type WatchFolder struct {
 	Name string `gorm:"size:255;not null"` // 显示名称
 	// 注意：MySQL InnoDB 单列索引最大 3072 字节（utf8mb4 约 768 字符），且 LocalPath 上有唯一索引，因此长度限制为 768。
 	LocalPath      string `gorm:"size:768;not null;unique"`                                  // 本地路径
+	RemoteRouteID  uint   `gorm:"not null;default:0;index"`                                  // 可复用远端路由 ID
 	RemoteName     string `gorm:"size:255;not null"`                                         // rclone remote 名称
 	RemotePath     string `gorm:"size:1024;not null"`                                        // 远端路径
 	SyncType       string `gorm:"size:64;not null;default:local_to_remote"`                  // 同步类型

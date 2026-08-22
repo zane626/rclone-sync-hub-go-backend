@@ -16,10 +16,17 @@ type FSDir struct {
 	HasSubDirs bool   `json:"has_sub_dirs"`
 }
 
+// FSDirectoryListing represents one safe, allowlisted filesystem location.
+type FSDirectoryListing struct {
+	CurrentPath string
+	ParentPath  string
+	Items       []FSDir
+}
+
 // FSService 文件系统相关服务，仅封装本地目录的读取逻辑。
 type FSService interface {
 	// ListSubDirs 返回给定路径下的一级子目录列表。
-	ListSubDirs(ctx context.Context, root string) ([]FSDir, error)
+	ListSubDirs(ctx context.Context, root string) (FSDirectoryListing, error)
 }
 
 type fsService struct {
@@ -31,33 +38,33 @@ func NewFSService(policy *security.ResourcePolicy) FSService {
 	return &fsService{policy: policy}
 }
 
-func (s *fsService) ListSubDirs(ctx context.Context, root string) ([]FSDir, error) {
+func (s *fsService) ListSubDirs(ctx context.Context, root string) (FSDirectoryListing, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return FSDirectoryListing{}, ctx.Err()
 	default:
 	}
 
 	absRoot, err := s.policy.ValidateLocalDirectory(root)
 	if err != nil {
-		return nil, apperror.Validation("directory is invalid, inaccessible, or outside the allowlist", err)
+		return FSDirectoryListing{}, apperror.Validation("directory is invalid, inaccessible, or outside the allowlist", err)
 	}
 	entries, err := os.ReadDir(absRoot)
 	if err != nil {
-		return nil, apperror.Validation("directory cannot be read", err)
+		return FSDirectoryListing{}, apperror.Validation("directory cannot be read", err)
 	}
 	var dirs []FSDir
 	for _, entry := range entries {
 		select {
 		case <-ctx.Done():
-			return dirs, ctx.Err()
+			return FSDirectoryListing{}, ctx.Err()
 		default:
 		}
 		if !entry.IsDir() {
 			continue
 		}
 		if len(dirs) >= 5000 {
-			return nil, apperror.Validation("directory contains too many subdirectories to list", nil)
+			return FSDirectoryListing{}, apperror.Validation("directory contains too many subdirectories to list", nil)
 		}
 		name := entry.Name()
 		fullPath := filepath.Join(absRoot, name)
@@ -68,7 +75,14 @@ func (s *fsService) ListSubDirs(ctx context.Context, root string) ([]FSDir, erro
 			HasSubDirs: hasSub,
 		})
 	}
-	return dirs, nil
+	listing := FSDirectoryListing{CurrentPath: absRoot, Items: dirs}
+	parent := filepath.Dir(absRoot)
+	if parent != absRoot {
+		if safeParent, parentErr := s.policy.ValidateLocalDirectory(parent); parentErr == nil {
+			listing.ParentPath = safeParent
+		}
+	}
+	return listing, nil
 }
 
 // hasSubDirs 判断目录下是否存在子目录（仅检查一层）。

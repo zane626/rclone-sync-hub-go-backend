@@ -166,6 +166,7 @@ func main() {
 	fileRepo := repository.NewFileRecordRepository(db)
 	logRepo := repository.NewUploadLogRepository(db)
 	watchFolderRepo := repository.NewWatchFolderRepository(db)
+	remoteRouteRepo := repository.NewRemoteRouteRepository(db)
 	scanRunRepo := repository.NewScanRunRepository(db)
 	analyticsRepo := repository.NewAnalyticsRepository(db)
 	auditRepo := repository.NewAuditLogRepository(db)
@@ -209,16 +210,30 @@ func main() {
 		ResourcePolicy:   resourcePolicy,
 		Metrics:          metrics,
 	})
+	remoteRouteScanner := scheduler.NewRemoteRouteScanner(remoteRouteRepo, rc, scheduler.RemoteRouteScannerConfig{
+		PollInterval:  time.Duration(cfg.Scan.WatchPollIntervalSeconds) * time.Second,
+		RouteTimeout:  time.Duration(cfg.Scan.FolderTimeoutSeconds) * time.Second,
+		MaxConcurrent: cfg.Scan.MaxConcurrentFolders,
+		BatchSize:     cfg.Scan.BatchSize,
+		InstanceID:    cfg.Worker.InstanceID,
+		LeaseDuration: time.Duration(cfg.Scan.LeaseSeconds) * time.Second,
+		Heartbeat:     time.Duration(cfg.Scan.HeartbeatSeconds) * time.Second,
+		Policy:        resourcePolicy,
+	})
 
 	uploadSvc := service.NewUploadService(taskRepo, fileRepo, logRepo, watchFolderScanner, q, resourcePolicy)
 	rcloneSvc := service.NewRcloneService(rc, resourcePolicy)
-	watchFolderSvc := service.NewWatchFolderService(watchFolderRepo, resourcePolicy)
+	watchFolderSvc := service.NewWatchFolderService(watchFolderRepo, remoteRouteRepo, resourcePolicy)
+	remoteRouteSvc := service.NewRemoteRouteService(remoteRouteRepo, resourcePolicy, remoteRouteScanner)
+	fileIndexSvc := service.NewFileIndexService(watchFolderRepo, fileRepo, taskRepo)
 	analyticsSvc := service.NewAnalyticsService(analyticsRepo)
 	fsSvc := service.NewFSService(resourcePolicy)
 	taskHandler := api.NewTaskHandler(uploadSvc)
 	healthHandler := api.NewHealthHandler(sqlDB)
 	rcloneHandler := api.NewRcloneHandler(rcloneSvc)
 	watchFolderHandler := api.NewWatchFolderHandler(watchFolderSvc)
+	remoteRouteHandler := api.NewRemoteRouteHandler(remoteRouteSvc)
+	fileIndexHandler := api.NewFileIndexHandler(fileIndexSvc)
 	analyticsHandler := api.NewAnalyticsHandler(analyticsSvc)
 	fsHandler := api.NewFSHandler(fsSvc)
 	authHandler := api.NewAuthHandler(authSvc, cfg.Security.LoginAttemptsPerMinute)
@@ -241,7 +256,7 @@ func main() {
 		logger.L.Fatal("invalid trusted proxy configuration", zap.Error(err))
 	}
 	r.Use(securityMiddleware.Base(), metrics.HTTPMiddleware(), securityMiddleware.AuditMutations(), gin.Recovery())
-	api.Router(r, taskHandler, healthHandler, rcloneHandler, watchFolderHandler, fsHandler, analyticsHandler, authHandler, operationsHandler, eventHandler, securityMiddleware)
+	api.Router(r, taskHandler, healthHandler, rcloneHandler, watchFolderHandler, fsHandler, analyticsHandler, authHandler, operationsHandler, eventHandler, remoteRouteHandler, fileIndexHandler, securityMiddleware)
 	if cfg.Security.MetricsToken != "" {
 		r.GET("/metrics", securityMiddleware.MetricsAuthenticate(), gin.WrapH(metrics.Handler()))
 	} else {
@@ -264,9 +279,10 @@ func main() {
 	defer stop()
 
 	var background sync.WaitGroup
-	background.Add(3)
+	background.Add(4)
 	go func() { defer background.Done(); q.Run(ctx) }()
 	go func() { defer background.Done(); watchFolderScanner.Run(ctx) }()
+	go func() { defer background.Done(); remoteRouteScanner.Run(ctx) }()
 	go func() { defer background.Done(); maintenanceSvc.Run(ctx) }()
 
 	// 7. HTTP 服务

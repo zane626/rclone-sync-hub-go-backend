@@ -75,6 +75,9 @@
             <strong>{{ clock.time }}</strong>
           </div>
           <router-link to="/operations" class="node-pill" :class="{ 'is-degraded': !operational && !systemChecking, 'is-checking': systemChecking }"><span /> {{ nodeLabel }}</router-link>
+          <button class="icon-button theme-toggle" type="button" :title="isDark ? '切换到白天主题' : '切换到黑夜主题'" :aria-label="isDark ? '切换到白天主题' : '切换到黑夜主题'" @click="toggleTheme">
+            <UiIcon :name="isDark ? 'sun' : 'moon'" :size="17" />
+          </button>
           <button class="topbar-account" type="button" title="退出登录" @click="handleLogout">
             <span>{{ initials }}</span>
             <div>
@@ -106,6 +109,8 @@ import UiIcon from './components/UiIcon.vue';
 import UiOverlay from './components/UiOverlay.vue';
 import { currentUser, logout } from './api/auth';
 import { useSystemStatus } from './composables/useSystemStatus';
+import { confirmDialog } from './composables/useUi';
+import { useTheme } from './composables/useTheme';
 
 const route = useRoute();
 const router = useRouter();
@@ -114,13 +119,15 @@ const user = ref(currentUser());
 const version = pkg.version;
 const clock = reactive({ date: '', time: '' });
 const { status: systemStatus, operational, checking: systemChecking } = useSystemStatus({ interval: 15000 });
+const { isDark, toggleTheme } = useTheme();
 let clockTimer;
 
 const navItems = [
   { path: '/dashboard', label: '运行总览', caption: 'Overview', icon: 'grid', index: '01' },
   { path: '/folders', label: '监控目录', caption: 'Watch folders', icon: 'folder', index: '02' },
-  { path: '/tasks', label: '任务中心', caption: 'Transfer queue', icon: 'tasks', index: '03' },
-  { path: '/operations', label: '运行中心', caption: 'Observability', icon: 'activity', index: '04' }
+  { path: '/remote-routes', label: '远端路由', caption: 'Remote routes', icon: 'database', index: '03' },
+  { path: '/tasks', label: '任务中心', caption: 'Transfer queue', icon: 'tasks', index: '04' },
+  { path: '/operations', label: '运行中心', caption: 'Observability', icon: 'activity', index: '05' }
 ];
 
 const pageMeta = computed(() => navItems.find((item) => route.path.startsWith(item.path)) || navItems[0]);
@@ -136,10 +143,23 @@ function updateClock() {
   clock.time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(now);
 }
 
-function handleLogout() {
+async function handleLogout() {
+  const confirmed = await confirmDialog({
+    title: '退出登录',
+    message: '确定要退出当前账号吗？退出后需要重新输入登录凭证。',
+    confirmText: '确认退出',
+    tone: 'danger'
+  });
+  if (!confirmed) return;
   logout();
   user.value = null;
   router.replace('/login');
+}
+
+function handleStorage(event) {
+  if (event.key !== 'rsh_access_token' && event.key !== 'rsh_user') return;
+  user.value = currentUser();
+  if (!event.storageArea?.getItem('rsh_access_token') && !route.meta.public) router.replace('/login');
 }
 
 watch(
@@ -155,8 +175,12 @@ watch(
 onMounted(() => {
   updateClock();
   clockTimer = window.setInterval(updateClock, 1000);
+  window.addEventListener('storage', handleStorage);
 });
-onBeforeUnmount(() => window.clearInterval(clockTimer));
+onBeforeUnmount(() => {
+  window.clearInterval(clockTimer);
+  window.removeEventListener('storage', handleStorage);
+});
 </script>
 
 <style scoped>
