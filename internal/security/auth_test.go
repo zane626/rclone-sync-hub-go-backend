@@ -40,6 +40,52 @@ func TestAuthServiceIssuesAndVerifiesRoleToken(t *testing.T) {
 	}
 }
 
+func TestAuthServiceAcceptsEightCharacterAdminPassword(t *testing.T) {
+	service, err := NewAuthService(AuthConfig{
+		Enabled:       true,
+		AdminUsername: "admin",
+		AdminPassword: "12345678",
+		TokenSecret:   strings.Repeat("s", 32),
+		TokenTTL:      time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("eight-character admin password was rejected: %v", err)
+	}
+	if _, _, err := service.Login("admin", "12345678"); err != nil {
+		t.Fatalf("login with eight-character admin password failed: %v", err)
+	}
+}
+
+func TestAuthServiceRejectsSevenCharacterAdminPassword(t *testing.T) {
+	_, err := NewAuthService(AuthConfig{
+		Enabled:       true,
+		AdminUsername: "admin",
+		AdminPassword: "1234567",
+		TokenSecret:   strings.Repeat("s", 32),
+		TokenTTL:      time.Hour,
+	})
+	if err == nil {
+		t.Fatal("seven-character admin password must be rejected")
+	}
+}
+
+func TestAuthServiceCountsUnicodeAdminPasswordCharacters(t *testing.T) {
+	password := strings.Repeat("密", 8)
+	service, err := NewAuthService(AuthConfig{
+		Enabled:       true,
+		AdminUsername: "admin",
+		AdminPassword: password,
+		TokenSecret:   strings.Repeat("s", 32),
+		TokenTTL:      time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("eight-character Unicode admin password was rejected: %v", err)
+	}
+	if _, _, err := service.Login("admin", password); err != nil {
+		t.Fatalf("login with Unicode admin password failed: %v", err)
+	}
+}
+
 func TestAuthServiceNormalizesConfiguredUsername(t *testing.T) {
 	service, err := NewAuthService(AuthConfig{
 		Enabled:       true,

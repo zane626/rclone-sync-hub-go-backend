@@ -44,7 +44,7 @@
 
 ### 生产方式：Docker Compose
 
-1. 复制 `.env.example` 为 `.env`，替换所有占位密码。管理员密码至少 12 字符，签名密钥和监控令牌至少 32 字符。
+1. 复制 `.env.example` 为 `.env`，替换所有占位密码。管理员密码至少 8 字符，签名密钥和监控令牌至少 32 字符。
 2. 在 `RCLONE_CONFIG_DIR` 下放置 `rclone.conf`；把待上传数据放在或挂载到 `LOCAL_DATA_DIR`。源数据挂载为只读；OAuth remote 的配置目录需允许容器 UID 10001 写回刷新后的 token。
 3. `ALLOWED_RCLONE_REMOTES` 只填写允许使用的 remote 名称，多个名称用逗号分隔。
 4. 校验并启动：

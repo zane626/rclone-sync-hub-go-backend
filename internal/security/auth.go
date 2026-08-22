@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -57,8 +58,8 @@ func NewAuthService(config AuthConfig) (*AuthService, error) {
 	if !config.Enabled {
 		return service, nil
 	}
-	if len(config.AdminPassword) < 12 {
-		return nil, errors.New("AUTH_ADMIN_PASSWORD must contain at least 12 characters")
+	if utf8.RuneCountInString(config.AdminPassword) < 8 {
+		return nil, errors.New("AUTH_ADMIN_PASSWORD must contain at least 8 characters")
 	}
 	if len(config.TokenSecret) < 32 {
 		return nil, errors.New("AUTH_TOKEN_SECRET must contain at least 32 characters")

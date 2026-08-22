@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -491,8 +492,8 @@ func (c *Config) Validate() error {
 		if !c.Security.Enabled {
 			return fmt.Errorf("authentication must be enabled in release mode")
 		}
-		if len(c.Security.AdminPassword) < 12 || len(c.Security.TokenSecret) < 32 {
-			return fmt.Errorf("release mode requires an admin password of at least 12 characters and a token secret of at least 32 characters")
+		if utf8.RuneCountInString(c.Security.AdminPassword) < 8 || len(c.Security.TokenSecret) < 32 {
+			return fmt.Errorf("release mode requires an admin password of at least 8 characters and a token secret of at least 32 characters")
 		}
 	}
 	return nil

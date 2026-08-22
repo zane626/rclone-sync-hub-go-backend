@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,37 @@ func TestLoadRejectsUnknownYAMLField(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected unknown YAML field to fail")
+	}
+}
+
+func TestValidateAcceptsEightCharacterAdminPasswordInReleaseMode(t *testing.T) {
+	config := &Config{}
+	applyDefaults(config)
+	config.Server.Mode = "release"
+	config.Database.Host = "mysql"
+	config.Database.User = "app"
+	config.Database.Password = "database-password"
+	config.Database.DBName = "test"
+	config.Security.Enabled = true
+	config.Security.AdminPassword = "12345678"
+	config.Security.TokenSecret = strings.Repeat("s", 32)
+	if err := config.Validate(); err != nil {
+		t.Fatalf("eight-character admin password was rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsSevenCharacterAdminPasswordInReleaseMode(t *testing.T) {
+	config := &Config{}
+	applyDefaults(config)
+	config.Server.Mode = "release"
+	config.Database.Host = "mysql"
+	config.Database.User = "app"
+	config.Database.Password = "database-password"
+	config.Database.DBName = "test"
+	config.Security.Enabled = true
+	config.Security.AdminPassword = "1234567"
+	config.Security.TokenSecret = strings.Repeat("s", 32)
+	if err := config.Validate(); err == nil {
+		t.Fatal("seven-character admin password must be rejected")
 	}
 }

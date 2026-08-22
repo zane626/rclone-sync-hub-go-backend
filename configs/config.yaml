@@ -56,7 +56,7 @@ log:
 security:
   enabled: true # 本地开发请使用 config.dev.yaml；release 模式禁止关闭
   admin_username: admin
-  admin_password: "" # 生产从 AUTH_ADMIN_PASSWORD 注入，至少 12 字符
+  admin_password: "" # 生产从 AUTH_ADMIN_PASSWORD 注入，至少 8 字符
   token_secret: ""   # 生产从 AUTH_TOKEN_SECRET 注入，至少 32 字符
   token_ttl_minutes: 720
   allowed_local_roots:
