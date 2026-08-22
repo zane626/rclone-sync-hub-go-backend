@@ -8,7 +8,7 @@
 4. Wait for `docker compose ps` to report both services healthy. Startup runs `rclone listremotes --long` and refuses to continue if the binary/config is unreadable or an allowlisted remote is missing. Verify `/api/health/live` and `/api/health/ready`, log in, create a test watch folder, and complete one canary upload.
 5. Terminate TLS at a reverse proxy or ingress. The default host bind is loopback so the service is not exposed directly.
 
-The application container is non-root, read-only, capability-free, and rejects startup when production credentials or the rclone remote allowlist are absent.
+The application container is non-root, read-only, and capability-free. It rejects startup when production credentials are absent or `rclone.conf` contains no usable remote; configured remotes are discovered automatically and may optionally be restricted to an explicit subset.
 
 ## Backup and restore
 

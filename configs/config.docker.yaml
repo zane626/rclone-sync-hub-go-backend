@@ -57,7 +57,7 @@ security:
   admin_password: ""
   token_secret: ""
   allowed_local_roots: [/volumes]
-  allowed_remotes: []
+  allowed_remotes: [] # 自动读取 rclone.conf 中的全部 remote
   max_request_body_bytes: 1048576
   login_attempts_per_minute: 10
 

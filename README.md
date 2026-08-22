@@ -11,10 +11,10 @@
 | 扫描可靠性 | `next_scan_at` 调度、目录超时、失败自动恢复、扫描历史、目录级并行、分布式租约和心跳 |
 | 上传队列 | MySQL 持久化队列、`FOR UPDATE SKIP LOCKED` 领取、优先级、租约续期、进程崩溃恢复 |
 | 失败处理 | 指数退避 + 抖动、最大次数、任务超时、暂停、取消、单个与批量重试 |
-| rclone | 精确文件目标 `copyto`、结构化进度、输出限长、remote 白名单、配置列表脱敏 |
+| rclone | 精确文件目标 `copyto`、结构化进度、输出限长、remote 自动发现与可选白名单、配置列表脱敏 |
 | 一致性 | 幂等键防重；任务成功与文件版本上传标记在同一数据库事务中提交 |
 | 权限安全 | HMAC Bearer 登录、bcrypt 密码、admin/viewer 角色、登录限流、请求体限制、安全响应头 |
-| 资源边界 | 本地根目录和 rclone remote 白名单、符号链接解析、路径穿越防护、变更操作审计 |
+| 资源边界 | 本地根目录和从配置文件发现的 rclone remote、符号链接解析、路径穿越防护、变更操作审计 |
 | 可观测性 | JSON 日志、请求 ID、liveness/readiness、Prometheus 指标、扫描逾期/队列积压告警、扫描历史、审计日志、SSE 进度 |
 | 数据治理 | 版本化迁移、迁移锁和 dirty 检测、日志/终态任务/扫描/审计数据分批保留清理 |
 | 交付运维 | 非 root 只读镜像、Compose 安全基线、CI 测试/漏洞门禁、多架构镜像、SBOM/来源证明 |
@@ -46,7 +46,7 @@
 
 1. 复制 `.env.example` 为 `.env`，替换所有占位密码。管理员密码至少 8 字符，签名密钥和监控令牌至少 32 字符。
 2. 在 `RCLONE_CONFIG_DIR` 下放置 `rclone.conf`；把待上传数据放在或挂载到 `LOCAL_DATA_DIR`。源数据挂载为只读；OAuth remote 的配置目录需允许容器 UID 10001 写回刷新后的 token。
-3. `ALLOWED_RCLONE_REMOTES` 只填写允许使用的 remote 名称，多个名称用逗号分隔。
+3. 系统启动时自动读取 `rclone.conf` 中的全部 remote。需要进一步限制可用范围时，才设置可选的 `ALLOWED_RCLONE_REMOTES`，多个名称用逗号分隔。
 4. 校验并启动：
 
 使用默认路径的 Linux 主机可执行 `chown -R 10001:10001 ./rclone && chmod 700 ./rclone`；自定义路径时先确认目标再调整命令。
@@ -84,7 +84,7 @@ pnpm --dir frontend dev
 
 ## 核心配置
 
-配置优先级为环境变量覆盖 YAML。生产 Compose 会强制要求数据库密码、管理员密码、签名密钥和 remote 白名单。
+配置优先级为环境变量覆盖 YAML。生产 Compose 会强制要求数据库密码、管理员密码和签名密钥；remote 默认从 `rclone.conf` 自动发现。
 
 | 类别 | 关键配置 |
 |---|---|
@@ -93,7 +93,7 @@ pnpm --dir frontend dev
 | 扫描恢复 | `SCAN_LEASE_SECONDS`、`SCAN_HEARTBEAT_SECONDS` |
 | Worker | `WORKER_MAX_CONCURRENT`、`WORKER_TASK_TIMEOUT_SECONDS`、重试与租约参数 |
 | 数据库 | 连接池、连接寿命、connect/read/write timeout、可选 `DB_TLS` |
-| 安全 | `AUTH_*`、`ALLOWED_LOCAL_ROOTS`、`ALLOWED_RCLONE_REMOTES`、`TRUSTED_PROXIES` |
+| 安全 | `AUTH_*`、`ALLOWED_LOCAL_ROOTS`、可选 `ALLOWED_RCLONE_REMOTES`、`TRUSTED_PROXIES` |
 | 运维 | `METRICS_BEARER_TOKEN`、保留天数、`BACKUP_DIR`、资源上限 |
 
 错误的布尔值或数值环境变量、YAML 未知字段，以及不可读取的已配置文件都会让程序启动失败，不会静默退回默认值。

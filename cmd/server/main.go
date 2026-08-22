@@ -92,10 +92,30 @@ func main() {
 	if err != nil {
 		logger.L.Fatal("invalid authentication configuration", zap.Error(err))
 	}
-	resourcePolicy, err := security.NewResourcePolicy(cfg.Security.Enabled, cfg.Security.AllowedLocalRoots, cfg.Security.AllowedRemotes)
+	rc := rclone.NewClient(cfg.Rclone.BinPath)
+	rcloneCtx, rcloneCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	configuredRemotes, err := rc.ListRemotes(rcloneCtx)
+	rcloneCancel()
+	if err != nil {
+		logger.L.Fatal("rclone preflight failed", zap.Error(err))
+	}
+	discoveredRemoteNames := make([]string, 0, len(configuredRemotes))
+	for _, remote := range configuredRemotes {
+		discoveredRemoteNames = append(discoveredRemoteNames, remote.Name)
+	}
+	allowedRemotes, err := security.ResolveAllowedRemotes(cfg.Security.AllowedRemotes, discoveredRemoteNames)
+	if err != nil {
+		logger.L.Fatal("invalid rclone remote policy", zap.Error(err))
+	}
+	resourcePolicy, err := security.NewResourcePolicy(cfg.Security.Enabled, cfg.Security.AllowedLocalRoots, allowedRemotes)
 	if err != nil {
 		logger.L.Fatal("invalid resource allowlist configuration", zap.Error(err))
 	}
+	logger.L.Info("rclone remote policy loaded",
+		zap.Int("configured_remotes", len(configuredRemotes)),
+		zap.Int("allowed_remotes", len(allowedRemotes)),
+		zap.Bool("auto_discovered", len(cfg.Security.AllowedRemotes) == 0),
+	)
 	if !cfg.Security.Enabled {
 		logger.L.Warn("authentication is disabled; do not expose this instance to an untrusted network")
 	}
@@ -156,26 +176,6 @@ func main() {
 	}
 	topologyCancel()
 
-	rc := rclone.NewClient(cfg.Rclone.BinPath)
-	rcloneCtx, rcloneCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	configuredRemotes, err := rc.ListRemotes(rcloneCtx)
-	rcloneCancel()
-	if err != nil {
-		logger.L.Fatal("rclone preflight failed", zap.Error(err))
-	}
-	remoteSet := make(map[string]struct{}, len(configuredRemotes))
-	for _, remote := range configuredRemotes {
-		remoteSet[remote.Name] = struct{}{}
-	}
-	missingRemotes := make([]string, 0)
-	for _, allowed := range cfg.Security.AllowedRemotes {
-		if _, exists := remoteSet[allowed]; !exists {
-			missingRemotes = append(missingRemotes, allowed)
-		}
-	}
-	if len(missingRemotes) > 0 {
-		logger.L.Fatal("allowed rclone remotes are missing from rclone.conf", zap.Strings("missing_remotes", missingRemotes))
-	}
 	eventHub := events.NewHub(100)
 	q := worker.NewQueue(taskRepo, logRepo, watchFolderRepo, rc, worker.Config{
 		MaxConcurrent:           cfg.Worker.MaxConcurrent,

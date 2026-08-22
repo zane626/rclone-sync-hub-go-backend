@@ -52,9 +52,55 @@ func NewResourcePolicy(enforce bool, roots, remotes []string) (*ResourcePolicy, 
 		return nil, errors.New("at least one ALLOWED_LOCAL_ROOTS entry is required when authentication is enabled")
 	}
 	if enforce && len(policy.allowedRemotes) == 0 {
-		return nil, errors.New("at least one ALLOWED_RCLONE_REMOTES entry is required when authentication is enabled")
+		return nil, errors.New("at least one rclone remote must be configured when authentication is enabled")
 	}
 	return policy, nil
+}
+
+// ResolveAllowedRemotes returns the effective remote policy. When no explicit
+// allowlist is configured, every remote discovered from rclone.conf is allowed.
+// An explicit allowlist remains supported for deployments that need to expose
+// only a subset of the configured remotes.
+func ResolveAllowedRemotes(explicit, discovered []string) ([]string, error) {
+	available := make(map[string]struct{}, len(discovered))
+	normalizedDiscovered := make([]string, 0, len(discovered))
+	for _, name := range discovered {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := available[name]; exists {
+			continue
+		}
+		available[name] = struct{}{}
+		normalizedDiscovered = append(normalizedDiscovered, name)
+	}
+	if len(explicit) == 0 {
+		return normalizedDiscovered, nil
+	}
+
+	allowed := make([]string, 0, len(explicit))
+	seen := make(map[string]struct{}, len(explicit))
+	missing := make([]string, 0)
+	for _, name := range explicit {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		if _, exists := available[name]; !exists {
+			missing = append(missing, name)
+			continue
+		}
+		allowed = append(allowed, name)
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("allowed rclone remotes are missing from rclone.conf: %s", strings.Join(missing, ", "))
+	}
+	return allowed, nil
 }
 
 func (p *ResourcePolicy) ValidateLocalFile(input string) (string, error) {

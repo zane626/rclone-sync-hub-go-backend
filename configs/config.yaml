@@ -61,7 +61,7 @@ security:
   token_ttl_minutes: 720
   allowed_local_roots:
     - /volumes
-  allowed_remotes: [] # 生产必须填写允许使用的 rclone remote 名称
+  allowed_remotes: [] # 留空时自动读取 rclone.conf 中的全部 remote；也可显式限制为子集
   max_request_body_bytes: 1048576
   login_attempts_per_minute: 10
   metrics_token: "" # 可选独立 Prometheus Bearer token，至少 32 字符
