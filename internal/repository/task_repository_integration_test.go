@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
-	"rclone-sync-hub/internal/database"
 	"rclone-sync-hub/internal/model"
 
 	"gorm.io/driver/mysql"
@@ -24,14 +24,14 @@ func openIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrator().DropTable(&model.UploadTask{}, &model.FileRecord{}, &model.WatchFolder{}); err != nil {
+	if err := db.Migrator().DropTable(&model.UploadTask{}, &model.FileRecord{}, &model.WatchFolderPathPipeline{}, &model.WatchFolder{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.WatchFolder{}, &model.FileRecord{}, &model.UploadTask{}); err != nil {
+	if err := db.AutoMigrate(&model.WatchFolder{}, &model.WatchFolderPathPipeline{}, &model.FileRecord{}, &model.UploadTask{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = db.Migrator().DropTable(&model.UploadTask{}, &model.FileRecord{}, &model.WatchFolder{})
+		_ = db.Migrator().DropTable(&model.UploadTask{}, &model.FileRecord{}, &model.WatchFolderPathPipeline{}, &model.WatchFolder{})
 	})
 	return db
 }
@@ -42,6 +42,55 @@ func newFileRecordFixture(localPath, relativePath, remotePath string) model.File
 		RelativePath: relativePath,
 		RemotePath:   remotePath,
 		FileModTime:  time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC),
+	}
+}
+
+func TestWatchFolderRepositoryPersistsPathPipeline(t *testing.T) {
+	db := openIntegrationDatabase(t)
+	repo := NewWatchFolderRepository(db)
+	want := []model.UploadPathPipelineStep{{
+		Type:    model.UploadPathPipelineStepRegexExtract,
+		Pattern: `\[(\d{4}-\d{2})-\d{2}_`,
+		Group:   1,
+	}}
+	folder := &model.WatchFolder{
+		Name: "pipeline", LocalPath: "/data/pipeline", RemoteName: "remote", RemotePath: "backup/Zz1tai",
+		SyncType: model.WatchFolderSyncTypeLocalToRemote, Status: model.WatchFolderStatusWatching, Enabled: true,
+		ScanIntervalSeconds: 60, PathPipeline: want,
+	}
+	if err := repo.Create(folder); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := repo.GetByID(folder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(loaded.PathPipeline, want) {
+		t.Fatalf("loaded pipeline=%+v, want %+v", loaded.PathPipeline, want)
+	}
+	due, err := repo.ListEnabledForScan(context.Background(), time.Now().Add(time.Second))
+	if err != nil || len(due) != 1 || !slices.Equal(due[0].PathPipeline, want) {
+		t.Fatalf("scan pipeline=%+v err=%v, want %+v", due, err, want)
+	}
+
+	loaded.PathPipeline = []model.UploadPathPipelineStep{}
+	if err := repo.Update(context.Background(), loaded, true, true); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = repo.GetByID(folder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.PathPipeline) != 0 {
+		t.Fatalf("pipeline was not cleared: %+v", loaded.PathPipeline)
+	}
+	var count int64
+	if err := db.Model(&model.WatchFolderPathPipeline{}).Where("watch_folder_id = ?", folder.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("pipeline config rows=%d, want 0", count)
 	}
 }
 
@@ -300,35 +349,5 @@ func TestDeleteWatchFolderCancelsWorkAndDetachesSnapshots(t *testing.T) {
 	}
 	if len(tasks) != 2 || tasks[0].Status != model.TaskStatusCanceled || tasks[1].Status != model.TaskStatusRunning || tasks[1].CancelRequestedAt == nil {
 		t.Fatalf("tasks were not safely canceled: %+v", tasks)
-	}
-}
-
-func TestOrphanReconciliationMigration(t *testing.T) {
-	db := openIntegrationDatabase(t)
-	file := newFileRecordFixture("/data/orphan/file.bin", "file.bin", "orphan/file.bin")
-	file.WatchFolderID = 999999
-	file.Fingerprint = "version"
-	if err := db.Create(&file).Error; err != nil {
-		t.Fatal(err)
-	}
-	task := model.UploadTask{WatchFolderID: 999999, FileRecordID: file.ID, Status: model.TaskStatusPending}
-	if err := db.Create(&task).Error; err != nil {
-		t.Fatal(err)
-	}
-	migrations := database.DefaultMigrations()
-	if len(migrations) < 3 {
-		t.Fatal("orphan reconciliation migration is missing")
-	}
-	if err := migrations[2].Up(db); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.First(&file, file.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.First(&task, task.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if file.WatchFolderID != 0 || task.Status != model.TaskStatusCanceled || task.CanceledAt == nil {
-		t.Fatalf("orphan data was not reconciled: file=%+v task=%+v", file, task)
 	}
 }

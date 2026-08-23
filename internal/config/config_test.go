@@ -33,8 +33,27 @@ func TestLoadFromEnvAppliesProductionDefaults(t *testing.T) {
 	if config.Database.ConnMaxLifetimeMins != 30 || config.Database.ConnectTimeoutSecs != 10 {
 		t.Fatalf("unexpected database defaults: %+v", config.Database)
 	}
+	if config.Server.WriteTimeoutSecs != 900 {
+		t.Fatalf("unexpected server write timeout: %d", config.Server.WriteTimeoutSecs)
+	}
 	if config.Maintenance.TaskRetentionDays != 365 {
 		t.Fatalf("unexpected task retention default: %+v", config.Maintenance)
+	}
+}
+
+func TestLoadFromEnvOverridesServerWriteTimeout(t *testing.T) {
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_USER", "app")
+	t.Setenv("DB_NAME", "test")
+	t.Setenv("AUTH_ENABLED", "false")
+	t.Setenv("SERVER_MODE", "debug")
+	t.Setenv("SERVER_WRITE_TIMEOUT_SECONDS", "1200")
+	config, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Server.WriteTimeoutSecs != 1200 {
+		t.Fatalf("unexpected server write timeout override: %d", config.Server.WriteTimeoutSecs)
 	}
 }
 
@@ -51,7 +70,7 @@ func TestValidateRejectsUnsafeConcurrency(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresConnectionForMigrationLock(t *testing.T) {
+func TestValidateRequiresConnectionForSchemaInitializationLock(t *testing.T) {
 	config := &Config{}
 	applyDefaults(config)
 	config.Database.Host = "localhost"

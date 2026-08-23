@@ -4,6 +4,7 @@ server:
   mode: release
   embed_frontend: true
   enable_swagger: false
+  write_timeout_seconds: 900
   trusted_proxies: []
 
 database:

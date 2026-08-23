@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -75,8 +76,20 @@ func NewWatchFolderRepository(db *gorm.DB) WatchFolderRepository {
 }
 
 func (r *watchFolderRepository) Create(f *model.WatchFolder) error {
-	if err := r.db.Create(f).Error; err != nil {
+	tx := r.db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Create(f).Error; err != nil {
+		tx.Rollback()
 		return fmt.Errorf("watch_folder create: %w", classifyConstraintError(err))
+	}
+	if err := saveWatchFolderPathPipeline(tx, f.ID, f.PathPipeline); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("watch_folder create commit: %w", err)
 	}
 	return nil
 }
@@ -89,6 +102,13 @@ func (r *watchFolderRepository) GetByID(id uint) (*model.WatchFolder, error) {
 		}
 		return nil, fmt.Errorf("watch_folder get by id: %w", err)
 	}
+	// loadWatchFolderPathPipelines receives a slice by value but updates its
+	// backing array, so use a one-element slice that owns the returned value.
+	list := []model.WatchFolder{f}
+	if err := r.loadWatchFolderPathPipelines(r.db, list); err != nil {
+		return nil, err
+	}
+	f = list[0]
 	return &f, nil
 }
 
@@ -147,12 +167,16 @@ func (r *watchFolderRepository) Update(ctx context.Context, f *model.WatchFolder
 		}
 		if err := tx.Model(&model.UploadTask{}).Where("watch_folder_id = ? AND status IN ?", f.ID, []string{model.TaskStatusPending, model.TaskStatusPaused, model.TaskStatusFailed}).
 			Updates(map[string]interface{}{
-				"status": model.TaskStatusCanceled, "error_message": "watch folder remote route changed", "finished_at": now,
+				"status": model.TaskStatusCanceled, "error_message": "watch folder upload destination changed", "finished_at": now,
 				"canceled_at": now, "last_status_at": now, "next_retry_at": nil, "cancel_requested_at": nil,
 			}).Error; err != nil {
 			tx.Rollback()
 			return fmt.Errorf("watch_folder cancel queued tasks after destination change: %w", err)
 		}
+	}
+	if err := saveWatchFolderPathPipeline(tx, f.ID, f.PathPipeline); err != nil {
+		tx.Rollback()
+		return err
 	}
 	if err := tx.Commit().Error; err != nil {
 		return fmt.Errorf("watch_folder update commit: %w", err)
@@ -208,6 +232,10 @@ func (r *watchFolderRepository) Delete(ctx context.Context, id uint) error {
 		tx.Rollback()
 		return fmt.Errorf("watch_folder detach file snapshots: %w", err)
 	}
+	if err := tx.Where("watch_folder_id = ?", id).Delete(&model.WatchFolderPathPipeline{}).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("watch_folder delete path pipeline: %w", err)
+	}
 	if err := tx.Delete(&model.WatchFolder{}, id).Error; err != nil {
 		tx.Rollback()
 		return fmt.Errorf("watch_folder delete: %w", err)
@@ -241,6 +269,9 @@ func (r *watchFolderRepository) List(status, keyword string, offset, limit int) 
 	if err := q.Find(&list).Error; err != nil {
 		return nil, 0, fmt.Errorf("watch_folder list: %w", err)
 	}
+	if err := r.loadWatchFolderPathPipelines(r.db, list); err != nil {
+		return nil, 0, err
+	}
 	return list, total, nil
 }
 
@@ -270,7 +301,63 @@ func (r *watchFolderRepository) ListEnabledForScan(ctx context.Context, now time
 	if err != nil {
 		return nil, fmt.Errorf("watch_folder list enabled for scan: %w", err)
 	}
+	if err := r.loadWatchFolderPathPipelines(r.db.WithContext(ctx), list); err != nil {
+		return nil, err
+	}
 	return list, nil
+}
+
+func saveWatchFolderPathPipeline(tx *gorm.DB, watchFolderID uint, steps []model.UploadPathPipelineStep) error {
+	if len(steps) == 0 {
+		if err := tx.Where("watch_folder_id = ?", watchFolderID).Delete(&model.WatchFolderPathPipeline{}).Error; err != nil {
+			return fmt.Errorf("watch_folder delete path pipeline: %w", err)
+		}
+		return nil
+	}
+	encoded, err := json.Marshal(steps)
+	if err != nil {
+		return fmt.Errorf("watch_folder encode path pipeline: %w", err)
+	}
+	config := model.WatchFolderPathPipeline{WatchFolderID: watchFolderID, StepsJSON: string(encoded)}
+	if err := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "watch_folder_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"steps_json", "updated_at"}),
+	}).Create(&config).Error; err != nil {
+		return fmt.Errorf("watch_folder save path pipeline: %w", err)
+	}
+	return nil
+}
+
+func (r *watchFolderRepository) loadWatchFolderPathPipelines(db *gorm.DB, folders []model.WatchFolder) error {
+	if len(folders) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(folders))
+	positions := make(map[uint]int, len(folders))
+	for index := range folders {
+		folders[index].PathPipeline = []model.UploadPathPipelineStep{}
+		ids = append(ids, folders[index].ID)
+		positions[folders[index].ID] = index
+	}
+	var configs []model.WatchFolderPathPipeline
+	if err := db.Where("watch_folder_id IN ?", ids).Find(&configs).Error; err != nil {
+		return fmt.Errorf("watch_folder load path pipelines: %w", err)
+	}
+	for _, config := range configs {
+		position, exists := positions[config.WatchFolderID]
+		if !exists {
+			continue
+		}
+		var steps []model.UploadPathPipelineStep
+		if err := json.Unmarshal([]byte(config.StepsJSON), &steps); err != nil {
+			return fmt.Errorf("watch_folder decode path pipeline %d: %w", config.WatchFolderID, err)
+		}
+		if steps == nil {
+			steps = []model.UploadPathPipelineStep{}
+		}
+		folders[position].PathPipeline = steps
+	}
+	return nil
 }
 
 // FinishScan updates only scanner-owned fields while holding the same lease.

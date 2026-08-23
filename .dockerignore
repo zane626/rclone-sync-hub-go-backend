@@ -16,3 +16,4 @@ bin
 backups
 data
 mysql_data
+docker

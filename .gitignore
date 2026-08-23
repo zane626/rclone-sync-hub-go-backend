@@ -22,3 +22,4 @@ vendor/
 Thumbs.db
 */node_modules
 */dist
+docker

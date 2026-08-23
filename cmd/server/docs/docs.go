@@ -747,6 +747,242 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/remote-routes/{id}/files/move": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-routes"
+                ],
+                "summary": "启动批量移动远端文件任务",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "路由 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "源文件路径与目标目录",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.RemoteFilesMoveReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.RemoteMoveOperation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/remote-routes/{id}/files/move/{operation_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-routes"
+                ],
+                "summary": "查询批量移动远端文件进度",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "路由 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "移动任务 ID",
+                        "name": "operation_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.RemoteMoveOperation"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/remote-routes/{id}/folders": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-routes"
+                ],
+                "summary": "重命名远端文件夹",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "路由 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "目录路径与新名称",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.RemoteFolderRenameReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.RemoteFolderMutationResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-routes"
+                ],
+                "summary": "创建远端文件夹",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "路由 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "父目录与文件夹名称",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.RemoteFolderCreateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/rclone-sync-hub_internal_service.RemoteFolderMutationResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/remote-routes/{id}/scan": {
             "post": {
                 "security": [
@@ -1913,6 +2149,110 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api.RemoteFilesMoveReq": {
+            "type": "object",
+            "required": [
+                "source_paths"
+            ],
+            "properties": {
+                "source_paths": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "target_folder": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.RemoteFolderCreateReq": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "parent_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.RemoteFolderRenameReq": {
+            "type": "object",
+            "required": [
+                "new_name",
+                "path"
+            ],
+            "properties": {
+                "new_name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.RemoteMoveOperation": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "current_path": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "failed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rclone-sync-hub_internal_service.RemoteFileMoveFailure"
+                    }
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "moved": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rclone-sync-hub_internal_service.RemoteFileMoveResult"
+                    }
+                },
+                "percent": {
+                    "type": "integer"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "processed": {
+                    "type": "integer"
+                },
+                "refresh_scheduled": {
+                    "type": "boolean"
+                },
+                "route_id": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api.RemoteRouteCreateReq": {
             "type": "object",
             "required": [
@@ -2027,6 +2367,13 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "path_pipeline": {
+                    "description": "可选，以文件名为输入并生成远端子目录",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep"
+                    }
+                },
                 "remote_name": {
                     "type": "string"
                 },
@@ -2063,6 +2410,12 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "path_pipeline": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep"
+                    }
                 },
                 "remote_name": {
                     "type": "string"
@@ -2233,6 +2586,20 @@ const docTemplate = `{
                 },
                 "taskID": {
                     "type": "integer"
+                }
+            }
+        },
+        "rclone-sync-hub_internal_model.UploadPathPipelineStep": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "integer"
+                },
+                "pattern": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
                 }
             }
         },
@@ -2440,6 +2807,13 @@ const docTemplate = `{
                 "nextScanAt": {
                     "description": "预计下一次扫描时间（可选）",
                     "type": "string"
+                },
+                "path_pipeline": {
+                    "description": "上传路径管道（从独立配置表装配）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep"
+                    }
                 },
                 "remoteName": {
                     "description": "rclone remote 名称",
@@ -2670,6 +3044,39 @@ const docTemplate = `{
                 },
                 "watch_folder_count": {
                     "type": "integer"
+                }
+            }
+        },
+        "rclone-sync-hub_internal_service.RemoteFileMoveFailure": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "source_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "rclone-sync-hub_internal_service.RemoteFileMoveResult": {
+            "type": "object",
+            "properties": {
+                "destination_path": {
+                    "type": "string"
+                },
+                "source_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "rclone-sync-hub_internal_service.RemoteFolderMutationResult": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "refresh_scheduled": {
+                    "type": "boolean"
                 }
             }
         },

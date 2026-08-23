@@ -5,16 +5,27 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"strings"
 	"time"
 
 	"rclone-sync-hub/internal/apperror"
+	"rclone-sync-hub/internal/logger"
 	"rclone-sync-hub/internal/model"
+	"rclone-sync-hub/internal/rclone"
 	"rclone-sync-hub/internal/repository"
 	"rclone-sync-hub/internal/security"
+
+	"go.uber.org/zap"
 )
 
 type remoteRouteScanWaker interface{ Wake() }
+
+type remoteRouteObjectOperator interface {
+	StatRemote(ctx context.Context, remoteName, remotePath string) (rclone.RemoteObject, bool, error)
+	MakeRemoteDirectory(ctx context.Context, remoteName, remotePath string) error
+	MoveRemoteObject(ctx context.Context, remoteName, sourcePath, destinationPath string) error
+}
 
 type RemoteRouteService interface {
 	Create(ctx context.Context, in CreateRemoteRouteInput) (*model.RemoteRoute, error)
@@ -25,6 +36,40 @@ type RemoteRouteService interface {
 	ScheduleScan(ctx context.Context, id uint) error
 	ScheduleAllScans(ctx context.Context) (int64, error)
 	BrowseFiles(ctx context.Context, id uint, currentPath string, page, pageSize int) (FileBrowseResult, error)
+	CreateFolder(ctx context.Context, id uint, parentPath, name string) (RemoteFolderMutationResult, error)
+	RenameFolder(ctx context.Context, id uint, folderPath, newName string) (RemoteFolderMutationResult, error)
+	MoveFiles(ctx context.Context, id uint, sourcePaths []string, targetFolder string) (RemoteBatchMoveResult, error)
+	MoveFilesWithProgress(ctx context.Context, id uint, sourcePaths []string, targetFolder string, onProgress func(RemoteMoveProgress)) (RemoteBatchMoveResult, error)
+}
+
+type RemoteFolderMutationResult struct {
+	Path             string `json:"path"`
+	RefreshScheduled bool   `json:"refresh_scheduled"`
+}
+
+type RemoteFileMoveResult struct {
+	SourcePath      string `json:"source_path"`
+	DestinationPath string `json:"destination_path"`
+}
+
+type RemoteFileMoveFailure struct {
+	SourcePath string `json:"source_path"`
+	Reason     string `json:"reason"`
+}
+
+type RemoteBatchMoveResult struct {
+	Moved            []RemoteFileMoveResult  `json:"moved"`
+	Failed           []RemoteFileMoveFailure `json:"failed"`
+	RefreshScheduled bool                    `json:"refresh_scheduled"`
+}
+
+// RemoteMoveProgress is an immutable snapshot emitted while a batch move runs.
+type RemoteMoveProgress struct {
+	Phase       string
+	Total       int
+	Processed   int
+	CurrentPath string
+	Result      RemoteBatchMoveResult
 }
 
 type CreateRemoteRouteInput struct {
@@ -44,13 +89,14 @@ type UpdateRemoteRouteInput struct {
 }
 
 type remoteRouteService struct {
-	repo   repository.RemoteRouteRepository
-	policy *security.ResourcePolicy
-	waker  remoteRouteScanWaker
+	repo     repository.RemoteRouteRepository
+	policy   *security.ResourcePolicy
+	waker    remoteRouteScanWaker
+	operator remoteRouteObjectOperator
 }
 
-func NewRemoteRouteService(repo repository.RemoteRouteRepository, policy *security.ResourcePolicy, waker remoteRouteScanWaker) RemoteRouteService {
-	return &remoteRouteService{repo: repo, policy: policy, waker: waker}
+func NewRemoteRouteService(repo repository.RemoteRouteRepository, policy *security.ResourcePolicy, waker remoteRouteScanWaker, operator remoteRouteObjectOperator) RemoteRouteService {
+	return &remoteRouteService{repo: repo, policy: policy, waker: waker, operator: operator}
 }
 
 func makeRemoteRouteKey(remoteName, remotePath string) string {
@@ -243,6 +289,295 @@ func (s *remoteRouteService) BrowseFiles(ctx context.Context, id uint, currentPa
 		})
 	}
 	return FileBrowseResult{CurrentPath: currentPath, ParentPath: parentIndexPath(currentPath), Items: entries, Total: int(total), Page: page, PageSize: pageSize}, nil
+}
+
+const maxRemoteMoveBatch = 100
+
+func validateRemoteObjectName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 255 || value == "." || value == ".." || strings.ContainsAny(value, "/\\\x00\r\n") {
+		return "", apperror.Validation("folder name is invalid or exceeds 255 characters", nil)
+	}
+	return value, nil
+}
+
+func normalizeRemoteMutationPath(value string, allowRoot bool) (string, error) {
+	normalized, err := normalizeIndexPath(value)
+	if err != nil {
+		return "", err
+	}
+	if normalized == "" && !allowRoot {
+		return "", apperror.Validation("path must identify an item below the route root", nil)
+	}
+	return normalized, nil
+}
+
+func (s *remoteRouteService) writableRoute(ctx context.Context, id uint) (*model.RemoteRoute, error) {
+	if s.operator == nil {
+		return nil, errors.New("remote mutation operator is unavailable")
+	}
+	route, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !route.Enabled {
+		return nil, apperror.Conflict("remote route must be enabled before it can be modified", nil)
+	}
+	if route.Status == model.RemoteRouteStatusScanning {
+		return nil, apperror.Conflict("remote route is currently scanning; retry after the scan finishes", nil)
+	}
+	return route, nil
+}
+
+func (s *remoteRouteService) routeObjectPath(route *model.RemoteRoute, relativePath string) (string, error) {
+	target := route.RemotePath
+	if relativePath != "" {
+		target = pathpkg.Join(route.RemotePath, relativePath)
+	}
+	validated, err := s.policy.ValidateRemote(route.RemoteName, target)
+	if err != nil {
+		return "", apperror.Validation("remote object path is invalid or outside the allowlist", err)
+	}
+	return validated, nil
+}
+
+func (s *remoteRouteService) scheduleMutationRefresh(ctx context.Context, routeID uint) bool {
+	if err := s.repo.ScheduleScan(ctx, routeID); err != nil {
+		logger.L.Warn("remote mutation succeeded but index refresh could not be scheduled", zap.Uint("remote_route_id", routeID), zap.Error(err))
+		return false
+	}
+	if s.waker != nil {
+		s.waker.Wake()
+	}
+	return true
+}
+
+func (s *remoteRouteService) CreateFolder(ctx context.Context, id uint, parentPath, name string) (RemoteFolderMutationResult, error) {
+	route, err := s.writableRoute(ctx, id)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	parentPath, err = normalizeRemoteMutationPath(parentPath, true)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	name, err = validateRemoteObjectName(name)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	parentRemotePath, err := s.routeObjectPath(route, parentPath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	parent, exists, err := s.operator.StatRemote(ctx, route.RemoteName, parentRemotePath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	if !exists || !parent.IsDir {
+		return RemoteFolderMutationResult{}, apperror.NotFound("parent remote folder does not exist", nil)
+	}
+	createdPath := name
+	if parentPath != "" {
+		createdPath = pathpkg.Join(parentPath, name)
+	}
+	createdRemotePath, err := s.routeObjectPath(route, createdPath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	if _, exists, err := s.operator.StatRemote(ctx, route.RemoteName, createdRemotePath); err != nil {
+		return RemoteFolderMutationResult{}, err
+	} else if exists {
+		return RemoteFolderMutationResult{}, apperror.Conflict("a remote file or folder with the same name already exists", nil)
+	}
+	if err := s.operator.MakeRemoteDirectory(ctx, route.RemoteName, createdRemotePath); err != nil {
+		if errors.Is(err, rclone.ErrRemoteDirectoryNotCreated) {
+			return RemoteFolderMutationResult{}, apperror.Conflict("远端服务未创建文件夹；若使用 OpenList 115 v4.2.2，请升级至 v4.2.3 或更高版本", err)
+		}
+		return RemoteFolderMutationResult{}, err
+	}
+	return RemoteFolderMutationResult{Path: createdPath, RefreshScheduled: s.scheduleMutationRefresh(ctx, route.ID)}, nil
+}
+
+func (s *remoteRouteService) RenameFolder(ctx context.Context, id uint, folderPath, newName string) (RemoteFolderMutationResult, error) {
+	route, err := s.writableRoute(ctx, id)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	folderPath, err = normalizeRemoteMutationPath(folderPath, false)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	newName, err = validateRemoteObjectName(newName)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	sourceRemotePath, err := s.routeObjectPath(route, folderPath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	source, exists, err := s.operator.StatRemote(ctx, route.RemoteName, sourceRemotePath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	if !exists || !source.IsDir {
+		return RemoteFolderMutationResult{}, apperror.NotFound("remote folder does not exist", nil)
+	}
+	parentPath := parentIndexPath(folderPath)
+	destinationPath := newName
+	if parentPath != "" {
+		destinationPath = pathpkg.Join(parentPath, newName)
+	}
+	if destinationPath == folderPath {
+		return RemoteFolderMutationResult{}, apperror.Validation("new folder name must be different", nil)
+	}
+	destinationRemotePath, err := s.routeObjectPath(route, destinationPath)
+	if err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	if _, exists, err := s.operator.StatRemote(ctx, route.RemoteName, destinationRemotePath); err != nil {
+		return RemoteFolderMutationResult{}, err
+	} else if exists {
+		return RemoteFolderMutationResult{}, apperror.Conflict("a remote file or folder with the same name already exists", nil)
+	}
+	if err := s.operator.MoveRemoteObject(ctx, route.RemoteName, sourceRemotePath, destinationRemotePath); err != nil {
+		return RemoteFolderMutationResult{}, err
+	}
+	return RemoteFolderMutationResult{Path: destinationPath, RefreshScheduled: s.scheduleMutationRefresh(ctx, route.ID)}, nil
+}
+
+func (s *remoteRouteService) MoveFiles(ctx context.Context, id uint, sourcePaths []string, targetFolder string) (RemoteBatchMoveResult, error) {
+	return s.MoveFilesWithProgress(ctx, id, sourcePaths, targetFolder, nil)
+}
+
+func (s *remoteRouteService) MoveFilesWithProgress(ctx context.Context, id uint, sourcePaths []string, targetFolder string, onProgress func(RemoteMoveProgress)) (RemoteBatchMoveResult, error) {
+	result := RemoteBatchMoveResult{Moved: []RemoteFileMoveResult{}, Failed: []RemoteFileMoveFailure{}}
+	if len(sourcePaths) == 0 {
+		return result, apperror.Validation("source_paths must contain at least one file", nil)
+	}
+	if len(sourcePaths) > maxRemoteMoveBatch {
+		return result, apperror.Validation("a batch can move at most 100 files", nil)
+	}
+	report := func(phase, currentPath string) {
+		if onProgress == nil {
+			return
+		}
+		snapshot := RemoteBatchMoveResult{
+			Moved:            append([]RemoteFileMoveResult(nil), result.Moved...),
+			Failed:           append([]RemoteFileMoveFailure(nil), result.Failed...),
+			RefreshScheduled: result.RefreshScheduled,
+		}
+		onProgress(RemoteMoveProgress{
+			Phase:       phase,
+			Total:       len(sourcePaths),
+			Processed:   len(snapshot.Moved) + len(snapshot.Failed),
+			CurrentPath: currentPath,
+			Result:      snapshot,
+		})
+	}
+	report("preparing", "")
+	route, err := s.writableRoute(ctx, id)
+	if err != nil {
+		return result, err
+	}
+	targetFolder, err = normalizeRemoteMutationPath(targetFolder, true)
+	if err != nil {
+		return result, err
+	}
+	targetRemotePath, err := s.routeObjectPath(route, targetFolder)
+	if err != nil {
+		return result, err
+	}
+	target, exists, err := s.operator.StatRemote(ctx, route.RemoteName, targetRemotePath)
+	if err != nil {
+		return result, err
+	}
+	if !exists || !target.IsDir {
+		return result, apperror.NotFound("target remote folder does not exist", nil)
+	}
+
+	type moveCandidate struct {
+		sourcePath       string
+		destinationPath  string
+		sourceRemotePath string
+		destRemotePath   string
+	}
+	candidates := make([]moveCandidate, 0, len(sourcePaths))
+	seenSources := make(map[string]struct{}, len(sourcePaths))
+	seenDestinations := make(map[string]struct{}, len(sourcePaths))
+	for _, rawSourcePath := range sourcePaths {
+		sourcePath, normalizeErr := normalizeRemoteMutationPath(rawSourcePath, false)
+		if normalizeErr != nil {
+			return result, normalizeErr
+		}
+		if _, duplicate := seenSources[sourcePath]; duplicate {
+			return result, apperror.Validation("source_paths must not contain duplicates", nil)
+		}
+		seenSources[sourcePath] = struct{}{}
+		report("validating", sourcePath)
+		destinationPath := pathpkg.Base(sourcePath)
+		if targetFolder != "" {
+			destinationPath = pathpkg.Join(targetFolder, destinationPath)
+		}
+		if destinationPath == sourcePath {
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: sourcePath, Reason: "file is already in the target folder"})
+			report("validating", sourcePath)
+			continue
+		}
+		if _, duplicate := seenDestinations[destinationPath]; duplicate {
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: sourcePath, Reason: "another selected file has the same destination name"})
+			report("validating", sourcePath)
+			continue
+		}
+		seenDestinations[destinationPath] = struct{}{}
+		sourceRemotePath, pathErr := s.routeObjectPath(route, sourcePath)
+		if pathErr != nil {
+			return result, pathErr
+		}
+		destinationRemotePath, pathErr := s.routeObjectPath(route, destinationPath)
+		if pathErr != nil {
+			return result, pathErr
+		}
+		source, sourceExists, statErr := s.operator.StatRemote(ctx, route.RemoteName, sourceRemotePath)
+		if statErr != nil {
+			return result, statErr
+		}
+		if !sourceExists {
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: sourcePath, Reason: "source file does not exist"})
+			report("validating", sourcePath)
+			continue
+		}
+		if source.IsDir {
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: sourcePath, Reason: "source path is a directory"})
+			report("validating", sourcePath)
+			continue
+		}
+		if _, destinationExists, statErr := s.operator.StatRemote(ctx, route.RemoteName, destinationRemotePath); statErr != nil {
+			return result, statErr
+		} else if destinationExists {
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: sourcePath, Reason: "destination already exists"})
+			report("validating", sourcePath)
+			continue
+		}
+		candidates = append(candidates, moveCandidate{sourcePath: sourcePath, destinationPath: destinationPath, sourceRemotePath: sourceRemotePath, destRemotePath: destinationRemotePath})
+	}
+
+	for _, candidate := range candidates {
+		report("moving", candidate.sourcePath)
+		if err := s.operator.MoveRemoteObject(ctx, route.RemoteName, candidate.sourceRemotePath, candidate.destRemotePath); err != nil {
+			logger.L.Warn("remote batch move item failed", zap.Uint("remote_route_id", route.ID), zap.String("source_path", candidate.sourcePath), zap.Error(err))
+			result.Failed = append(result.Failed, RemoteFileMoveFailure{SourcePath: candidate.sourcePath, Reason: "remote move failed"})
+			report("moving", candidate.sourcePath)
+			continue
+		}
+		result.Moved = append(result.Moved, RemoteFileMoveResult{SourcePath: candidate.sourcePath, DestinationPath: candidate.destinationPath})
+		report("moving", candidate.sourcePath)
+	}
+	if len(result.Moved) > 0 {
+		report("refreshing", "")
+		result.RefreshScheduled = s.scheduleMutationRefresh(ctx, route.ID)
+	}
+	report("completed", "")
+	return result, nil
 }
 
 func remoteRouteRepositoryError(err error) error {

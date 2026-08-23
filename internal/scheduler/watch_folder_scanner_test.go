@@ -100,6 +100,55 @@ func TestWatchFolderScannerSkipsUnstableFileUntilLaterScan(t *testing.T) {
 	}
 }
 
+func TestWatchFolderScannerRoutesFileThroughRegexPipeline(t *testing.T) {
+	root := t.TempDir()
+	fileName := `[Zz1tai]-直播回放-[2025-11-19_21_01_27].mp4`
+	filePath := filepath.Join(root, fileName)
+	writeStableFile(t, filePath, []byte("video"), time.Now().Add(-time.Hour))
+
+	watchRepo := newFakeWatchRepo(root)
+	watchRepo.folders[0].RemotePath = "backup/Zz1tai"
+	watchRepo.folders[0].PathPipeline = []model.UploadPathPipelineStep{{
+		Type:    model.UploadPathPipelineStepRegexExtract,
+		Pattern: `\[(\d{4}-\d{2})-\d{2}_`,
+		Group:   1,
+	}}
+	taskRepo := &fakeTaskRepo{}
+	scanner := newTestWatchScanner(watchRepo, newFakeFileRepo(), taskRepo, &fakeScanRunRepo{}, 0)
+
+	created, err := scanner.ScanOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || len(taskRepo.tasks) != 1 {
+		t.Fatalf("created=%d tasks=%d, want 1/1", created, len(taskRepo.tasks))
+	}
+	want := "backup/Zz1tai/2025-11/" + fileName
+	if got := taskRepo.tasks[0].RemotePath; got != want {
+		t.Fatalf("remote path=%q, want %q", got, want)
+	}
+}
+
+func TestWatchFolderScannerKeepsNormalPathWhenPipelineDoesNotMatch(t *testing.T) {
+	root := t.TempDir()
+	fileName := "plain.mp4"
+	writeStableFile(t, filepath.Join(root, fileName), []byte("video"), time.Now().Add(-time.Hour))
+
+	watchRepo := newFakeWatchRepo(root)
+	watchRepo.folders[0].PathPipeline = []model.UploadPathPipelineStep{{
+		Type: model.UploadPathPipelineStepRegexExtract, Pattern: `\[(\d{4}-\d{2})-`, Group: 1,
+	}}
+	taskRepo := &fakeTaskRepo{}
+	scanner := newTestWatchScanner(watchRepo, newFakeFileRepo(), taskRepo, &fakeScanRunRepo{}, 0)
+
+	if _, err := scanner.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := taskRepo.tasks[0].RemotePath, "backup/"+fileName; got != want {
+		t.Fatalf("remote path=%q, want %q", got, want)
+	}
+}
+
 func TestFileVersionStableEventuallyAcceptsFutureMtime(t *testing.T) {
 	now := time.Now()
 	futureModTime := now.Add(24 * time.Hour)

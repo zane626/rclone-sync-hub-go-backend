@@ -67,5 +67,9 @@ func Router(
 	admin.DELETE("/remote-routes/:id", remoteRouteHandler.Delete)
 	admin.POST("/remote-routes/scan", remoteRouteHandler.ScanAll)
 	admin.POST("/remote-routes/:id/scan", remoteRouteHandler.Scan)
+	admin.POST("/remote-routes/:id/folders", remoteRouteHandler.CreateFolder)
+	admin.PUT("/remote-routes/:id/folders", remoteRouteHandler.RenameFolder)
+	admin.POST("/remote-routes/:id/files/move", remoteRouteHandler.MoveFiles)
+	admin.GET("/remote-routes/:id/files/move/:operation_id", remoteRouteHandler.GetMoveOperation)
 	admin.GET("/audit-logs", operationsHandler.ListAuditLogs)
 }

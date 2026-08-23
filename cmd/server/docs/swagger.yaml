@@ -32,6 +32,75 @@ definitions:
     - password
     - username
     type: object
+  internal_api.RemoteFilesMoveReq:
+    properties:
+      source_paths:
+        items:
+          type: string
+        maxItems: 100
+        minItems: 1
+        type: array
+      target_folder:
+        type: string
+    required:
+    - source_paths
+    type: object
+  internal_api.RemoteFolderCreateReq:
+    properties:
+      name:
+        type: string
+      parent_path:
+        type: string
+    required:
+    - name
+    type: object
+  internal_api.RemoteFolderRenameReq:
+    properties:
+      new_name:
+        type: string
+      path:
+        type: string
+    required:
+    - new_name
+    - path
+    type: object
+  internal_api.RemoteMoveOperation:
+    properties:
+      created_at:
+        type: string
+      current_path:
+        type: string
+      error:
+        type: string
+      failed:
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_service.RemoteFileMoveFailure'
+        type: array
+      finished_at:
+        type: string
+      id:
+        type: string
+      moved:
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_service.RemoteFileMoveResult'
+        type: array
+      percent:
+        type: integer
+      phase:
+        type: string
+      processed:
+        type: integer
+      refresh_scheduled:
+        type: boolean
+      route_id:
+        type: integer
+      started_at:
+        type: string
+      status:
+        type: string
+      total:
+        type: integer
+    type: object
   internal_api.RemoteRouteCreateReq:
     properties:
       enabled:
@@ -107,6 +176,11 @@ definitions:
         type: integer
       name:
         type: string
+      path_pipeline:
+        description: 可选，以文件名为输入并生成远端子目录
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep'
+        type: array
       remote_name:
         type: string
       remote_path:
@@ -135,6 +209,10 @@ definitions:
         type: integer
       name:
         type: string
+      path_pipeline:
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep'
+        type: array
       remote_name:
         type: string
       remote_path:
@@ -249,6 +327,15 @@ definitions:
         type: integer
       taskID:
         type: integer
+    type: object
+  rclone-sync-hub_internal_model.UploadPathPipelineStep:
+    properties:
+      group:
+        type: integer
+      pattern:
+        type: string
+      type:
+        type: string
     type: object
   rclone-sync-hub_internal_model.UploadTask:
     properties:
@@ -400,6 +487,11 @@ definitions:
       nextScanAt:
         description: 预计下一次扫描时间（可选）
         type: string
+      path_pipeline:
+        description: 上传路径管道（从独立配置表装配）
+        items:
+          $ref: '#/definitions/rclone-sync-hub_internal_model.UploadPathPipelineStep'
+        type: array
       remoteName:
         description: rclone remote 名称
         type: string
@@ -554,6 +646,27 @@ definitions:
         type: integer
       watch_folder_count:
         type: integer
+    type: object
+  rclone-sync-hub_internal_service.RemoteFileMoveFailure:
+    properties:
+      reason:
+        type: string
+      source_path:
+        type: string
+    type: object
+  rclone-sync-hub_internal_service.RemoteFileMoveResult:
+    properties:
+      destination_path:
+        type: string
+      source_path:
+        type: string
+    type: object
+  rclone-sync-hub_internal_service.RemoteFolderMutationResult:
+    properties:
+      path:
+        type: string
+      refresh_scheduled:
+        type: boolean
     type: object
   rclone-sync-hub_internal_service.StatusItemVO:
     properties:
@@ -1064,6 +1177,156 @@ paths:
       security:
       - BearerAuth: []
       summary: 浏览远端文件索引
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}/files/move:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 源文件路径与目标目录
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.RemoteFilesMoveReq'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal_api.RemoteMoveOperation'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 启动批量移动远端文件任务
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}/files/move/{operation_id}:
+    get:
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 移动任务 ID
+        in: path
+        name: operation_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.RemoteMoveOperation'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 查询批量移动远端文件进度
+      tags:
+      - remote-routes
+  /api/remote-routes/{id}/folders:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 父目录与文件夹名称
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.RemoteFolderCreateReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_service.RemoteFolderMutationResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建远端文件夹
+      tags:
+      - remote-routes
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: 路由 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 目录路径与新名称
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.RemoteFolderRenameReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rclone-sync-hub_internal_service.RemoteFolderMutationResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 重命名远端文件夹
       tags:
       - remote-routes
   /api/remote-routes/{id}/scan:

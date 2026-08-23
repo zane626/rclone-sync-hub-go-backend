@@ -149,11 +149,17 @@ func main() {
 	}
 	defer sqlDB.Close()
 	metrics := observability.NewMetrics(sqlDB)
-	migrationCtx, migrationCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer migrationCancel()
-	if err := database.RunMigrations(migrationCtx, db, database.DefaultMigrations()); err != nil {
-		logger.L.Fatal("migrate failed", zap.Error(err))
+	logger.L.Info("initializing missing database tables")
+	createdTables, err := database.CreateMissingTables(context.Background(), db, func(tableName string) {
+		logger.L.Info("creating database table", zap.String("table", tableName))
+	})
+	if err != nil {
+		logger.L.Fatal("initialize database tables failed", zap.Error(err))
 	}
+	logger.L.Info("database tables ready",
+		zap.Int("created_table_count", len(createdTables)),
+		zap.Strings("created_tables", createdTables),
+	)
 
 	// 3.1 启动状态修复（将上一次异常退出残留的状态修复为安全状态）
 	taskInitSvc := service.NewTaskInitService(db)
@@ -224,7 +230,7 @@ func main() {
 	uploadSvc := service.NewUploadService(taskRepo, fileRepo, logRepo, watchFolderScanner, q, resourcePolicy)
 	rcloneSvc := service.NewRcloneService(rc, resourcePolicy)
 	watchFolderSvc := service.NewWatchFolderService(watchFolderRepo, remoteRouteRepo, resourcePolicy)
-	remoteRouteSvc := service.NewRemoteRouteService(remoteRouteRepo, resourcePolicy, remoteRouteScanner)
+	remoteRouteSvc := service.NewRemoteRouteService(remoteRouteRepo, resourcePolicy, remoteRouteScanner, rc)
 	fileIndexSvc := service.NewFileIndexService(watchFolderRepo, fileRepo, taskRepo)
 	analyticsSvc := service.NewAnalyticsService(analyticsRepo)
 	fsSvc := service.NewFSService(resourcePolicy)
@@ -291,7 +297,7 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutSecs) * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}

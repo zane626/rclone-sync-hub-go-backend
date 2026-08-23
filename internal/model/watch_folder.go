@@ -16,6 +16,35 @@ const (
 	WatchFolderSyncTypeLocalToRemote = "local_to_remote"
 )
 
+// UploadPathPipelineStepType 定义上传路径管道支持的步骤类型。
+// 管道以文件名为初始输入，步骤按顺序转换，最终结果作为远端子目录。
+const (
+	UploadPathPipelineStepRegexExtract = "regex_extract"
+)
+
+// UploadPathPipelineStep 是可扩展的上传路径转换步骤。
+// 当前 regex_extract 使用 Pattern 匹配当前输入，并以 Group 指定的捕获组作为下一步输入。
+type UploadPathPipelineStep struct {
+	Type    string `json:"type"`
+	Pattern string `json:"pattern,omitempty"`
+	Group   int    `json:"group,omitempty"`
+}
+
+// WatchFolderPathPipeline 独立保存监听目录的管道配置。
+// 使用 JSON 保存有序步骤，后续新增步骤类型时无需修改现有业务表结构。
+type WatchFolderPathPipeline struct {
+	ID            uint   `gorm:"primaryKey"`
+	WatchFolderID uint   `gorm:"not null;uniqueIndex"`
+	StepsJSON     string `gorm:"type:text;not null"`
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (WatchFolderPathPipeline) TableName() string {
+	return "watch_folder_path_pipelines"
+}
+
 // WatchFolder 监听文件夹配置与统计信息。
 // 用于管理需要被扫描/监听并同步到网盘的本地目录。
 type WatchFolder struct {
@@ -60,7 +89,8 @@ type WatchFolder struct {
 	WindowUploadedBytes int64 `gorm:"default:0"` // 窗口内上传字节数
 
 	// 配置相关扩展
-	ScanIntervalSeconds int `gorm:"default:300"` // 扫描间隔（秒），未来可用于单独控制每个目录的扫描频率
+	ScanIntervalSeconds int                      `gorm:"default:300"`            // 扫描间隔（秒），未来可用于单独控制每个目录的扫描频率
+	PathPipeline        []UploadPathPipelineStep `gorm:"-" json:"path_pipeline"` // 上传路径管道（从独立配置表装配）
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

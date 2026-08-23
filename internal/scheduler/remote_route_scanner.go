@@ -24,7 +24,7 @@ type remoteRouteScanRepository interface {
 	RenewScanLease(ctx context.Context, id uint, owner string, leaseDuration time.Duration) (bool, error)
 	FinishScan(ctx context.Context, id uint, owner string, updates map[string]interface{}) error
 	UpsertFileRecords(ctx context.Context, records []*model.RemoteFileRecord, batchSize int) error
-	MarkUnseenMissing(ctx context.Context, routeID uint, scanStarted, missingAt time.Time) (int64, error)
+	DeleteUnseenFileRecords(ctx context.Context, routeID uint, scanStarted time.Time) (int64, error)
 }
 
 type RemoteRouteScanner interface {
@@ -314,7 +314,7 @@ func (s *remoteRouteScanner) indexRoute(ctx context.Context, route *model.Remote
 	if err := flush(); err != nil {
 		return files, bytes, err
 	}
-	if _, err := s.repo.MarkUnseenMissing(ctx, route.ID, scanMarker, time.Now()); err != nil {
+	if _, err := s.repo.DeleteUnseenFileRecords(ctx, route.ID, scanMarker); err != nil {
 		return files, bytes, err
 	}
 	return files, bytes, nil

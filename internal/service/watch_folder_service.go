@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"rclone-sync-hub/internal/apperror"
 	"rclone-sync-hub/internal/model"
+	"rclone-sync-hub/internal/pathpipeline"
 	"rclone-sync-hub/internal/repository"
 	"rclone-sync-hub/internal/security"
 )
@@ -45,6 +47,7 @@ type CreateWatchFolderInput struct {
 	MaxDepth           int
 	FilterKeywords     string // 多行关键字，换行分隔，校验时去除每行首尾空格
 	ScanIntervalSecond int
+	PathPipeline       []model.UploadPathPipelineStep
 }
 
 // UpdateWatchFolderInput 更新监听文件夹的入参。
@@ -58,6 +61,7 @@ type UpdateWatchFolderInput struct {
 	MaxDepth           *int
 	FilterKeywords     *string
 	ScanIntervalSecond *int
+	PathPipeline       *[]model.UploadPathPipelineStep
 	Status             *string
 	Enabled            *bool
 }
@@ -90,6 +94,10 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 	if len(in.FilterKeywords) > 16*1024 {
 		return nil, apperror.Validation("filter_keywords is too large", nil)
 	}
+	pathPipeline, err := pathpipeline.Normalize(in.PathPipeline)
+	if err != nil {
+		return nil, apperror.Validation("path_pipeline is invalid", err)
+	}
 	now := time.Now()
 	syncType := in.SyncType
 	if syncType == "" {
@@ -118,6 +126,7 @@ func (s *watchFolderService) Create(ctx context.Context, in CreateWatchFolderInp
 		MaxDepth:            in.MaxDepth,
 		FilterKeywords:      in.FilterKeywords,
 		ScanIntervalSeconds: interval,
+		PathPipeline:        pathPipeline,
 		Status:              model.WatchFolderStatusWatching,
 		Enabled:             true,
 		LastActiveAt:        &now,
@@ -140,7 +149,8 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 		return nil, err
 	}
 	previousRemoteRouteID, previousRemoteName, previousRemotePath := f.RemoteRouteID, f.RemoteName, f.RemotePath
-	configurationChanged := in.Name != nil || in.LocalPath != nil || in.RemoteRouteID != nil || in.RemoteName != nil || in.RemotePath != nil || in.SyncType != nil || in.MaxDepth != nil || in.FilterKeywords != nil || in.ScanIntervalSecond != nil
+	previousPathPipeline := append([]model.UploadPathPipelineStep(nil), f.PathPipeline...)
+	configurationChanged := in.Name != nil || in.LocalPath != nil || in.RemoteRouteID != nil || in.RemoteName != nil || in.RemotePath != nil || in.SyncType != nil || in.MaxDepth != nil || in.FilterKeywords != nil || in.ScanIntervalSecond != nil || in.PathPipeline != nil
 	if f.Status == model.WatchFolderStatusDetecting && configurationChanged {
 		return nil, apperror.Conflict("watch folder configuration cannot change during an active scan", nil)
 	}
@@ -182,6 +192,13 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	if in.ScanIntervalSecond != nil && *in.ScanIntervalSecond > 0 {
 		f.ScanIntervalSeconds = *in.ScanIntervalSecond
 	}
+	if in.PathPipeline != nil {
+		normalized, normalizeErr := pathpipeline.Normalize(*in.PathPipeline)
+		if normalizeErr != nil {
+			return nil, apperror.Validation("path_pipeline is invalid", normalizeErr)
+		}
+		f.PathPipeline = normalized
+	}
 	if in.Status != nil && *in.Status != "" {
 		f.Status = *in.Status
 	}
@@ -221,7 +238,8 @@ func (s *watchFolderService) Update(ctx context.Context, id uint, in UpdateWatch
 	}
 	f.LocalPath = localPath
 	f.RemotePath = remotePath
-	destinationChanged := previousRemoteRouteID != f.RemoteRouteID || previousRemoteName != f.RemoteName || previousRemotePath != f.RemotePath
+	pipelineChanged := !slices.Equal(previousPathPipeline, f.PathPipeline)
+	destinationChanged := previousRemoteRouteID != f.RemoteRouteID || previousRemoteName != f.RemoteName || previousRemotePath != f.RemotePath || pipelineChanged
 	if err := s.ensurePathDoesNotOverlap(ctx, id, localPath); err != nil {
 		return nil, err
 	}

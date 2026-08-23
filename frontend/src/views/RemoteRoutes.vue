@@ -55,7 +55,19 @@
       <footer class="sheet-footer"><button class="ui-button is-ghost" type="button" @click="closeDrawer">取消</button><button class="ui-button is-primary" type="button" :disabled="saving" @click="handleSubmit"><span v-if="saving" class="mini-spinner is-dark" /><UiIcon v-else name="check" :size="16" />{{ saving ? '正在保存' : '保存路由' }}</button></footer>
     </aside></div></Transition>
 
-    <IndexedFileBrowser :visible="fileBrowserVisible" :title="`${selectedRoute?.name || ''} · 远端文件`" :subtitle="selectedRoute ? `${selectedRoute.remoteName}:${selectedRoute.remotePath}` : ''" :loader="loadSelectedFiles" @close="fileBrowserVisible = false" />
+    <IndexedFileBrowser
+      :visible="fileBrowserVisible"
+      :title="`${selectedRoute?.name || ''} · 远端文件`"
+      :subtitle="selectedRoute ? `${selectedRoute.remoteName}:${selectedRoute.remotePath}` : ''"
+      :root-label="selectedRoute ? `${selectedRoute.remoteName}:${selectedRoute.remotePath}` : ''"
+      :loader="loadSelectedFiles"
+      :can-manage="isAdmin"
+      :create-folder="createSelectedRemoteFolder"
+      :rename-folder="renameSelectedRemoteFolder"
+      :move-files="moveSelectedRemoteFiles"
+      tree
+      @close="fileBrowserVisible = false"
+    />
   </div>
 </template>
 
@@ -67,7 +79,7 @@ import PaginationBar from '../components/PaginationBar.vue';
 import IndexedFileBrowser from '../components/IndexedFileBrowser.vue';
 import { currentUser } from '../api/auth';
 import { fetchRcloneConfigs } from '../api/rclone';
-import { createRemoteRoute, deleteRemoteRoute, fetchRemoteRouteFiles, fetchRemoteRoutes, scanAllRemoteRoutes, scanRemoteRoute, updateRemoteRoute } from '../api/remoteRoutes';
+import { createRemoteFolder, createRemoteRoute, deleteRemoteRoute, fetchRemoteRouteFiles, fetchRemoteRoutes, moveRemoteFiles, renameRemoteFolder, scanAllRemoteRoutes, scanRemoteRoute, updateRemoteRoute } from '../api/remoteRoutes';
 import { confirmDialog, errorText, toast } from '../composables/useUi';
 
 const isAdmin = currentUser()?.role !== 'viewer';
@@ -100,6 +112,9 @@ async function handleScan(row){try{await scanRemoteRoute(row.id);toast(`已安�
 async function handleScanAll(){scanAllLoading.value=true;try{const result=await scanAllRemoteRoutes();toast(`已安排 ${Number(result.scheduled||0)} 条远端路由扫描`,'success');setTimeout(()=>loadData(true),500);}catch(error){toast(errorText(error,'扫描下发失败'),'error');}finally{scanAllLoading.value=false;}}
 function openFiles(row){selectedRoute.value=row;fileBrowserVisible.value=true;}
 function loadSelectedFiles(path,page,pageSize){return fetchRemoteRouteFiles(selectedRoute.value.id,{path,page,page_size:pageSize});}
+async function createSelectedRemoteFolder(parentPath,name){const result=await createRemoteFolder(selectedRoute.value.id,{parent_path:parentPath,name});setTimeout(()=>loadData(true),500);return result;}
+async function renameSelectedRemoteFolder(path,newName){const result=await renameRemoteFolder(selectedRoute.value.id,{path,new_name:newName});setTimeout(()=>loadData(true),500);return result;}
+async function moveSelectedRemoteFiles(sourcePaths,targetFolder,onProgress){const result=await moveRemoteFiles(selectedRoute.value.id,{source_paths:sourcePaths,target_folder:targetFolder},onProgress);setTimeout(()=>loadData(true),500);return result;}
 async function loadRemotes(){remoteLoading.value=true;try{const result=await fetchRcloneConfigs();remoteOptions.value=(result.items||[]).map((item)=>({label:`${item.name}${item.type?` · ${item.type}`:''}`,value:item.name}));}catch(error){toast(errorText(error,'Remote 列表加载失败'),'warning');}finally{remoteLoading.value=false;}}
 function handleKeydown(event){if(event.key==='Escape'&&drawerVisible.value)closeDrawer();}
 onMounted(()=>{loadData();loadRemotes();refreshTimer=setInterval(()=>loadData(true),15000);window.addEventListener('keydown',handleKeydown);});
@@ -111,5 +126,9 @@ onBeforeUnmount(()=>{clearInterval(refreshTimer);window.removeEventListener('key
 .route-summary{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--panel-background);box-shadow:var(--shadow-card)}.route-summary>div{min-height:82px;display:flex;flex-direction:column;justify-content:center;padding:0 22px;border-right:1px solid var(--line)}.route-summary>div:last-child{border-right:0}.route-summary small{color:var(--text-muted);font-size:9px}.route-summary strong{margin-top:5px;color:var(--text-strong);font:600 21px var(--font-mono)}
 .route-panel{z-index:1}.route-toolbar{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:17px 20px;border-bottom:1px solid var(--line)}.route-toolbar>div{display:flex;align-items:center;gap:10px}.route-toolbar>div>span{width:36px;height:36px;display:grid;place-items:center;color:var(--violet);border-radius:10px;background:rgba(140,118,255,.09)}.route-toolbar h2,.route-toolbar p{margin:0}.route-toolbar h2{color:var(--text-strong);font-size:13px}.route-toolbar p{margin-top:3px;color:var(--text-muted);font:500 8px var(--font-mono)}.route-toolbar form{display:flex;gap:8px}.route-toolbar form>select{width:135px}.route-toolbar .ui-control{height:36px;font-size:11px}.route-toolbar .search-field{min-width:240px}.routes-table{min-width:1180px}.route-identity{display:flex;align-items:center;gap:10px;min-width:170px}.route-identity>span{width:36px;height:36px;display:grid;place-items:center;color:var(--violet);border-radius:10px;background:rgba(140,118,255,.09)}.route-identity strong,.route-identity small,.route-target strong,.route-target small,.date-cell strong,.date-cell small,.capacity-cell strong,.capacity-cell small{display:block}.route-identity strong{color:var(--text-strong);font-size:11px}.route-identity small,.route-target small,.date-cell small,.capacity-cell small{margin-top:4px;color:var(--text-muted);font-size:8px}.route-target strong{color:var(--violet);font-size:10px}.route-target small{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.date-cell strong{color:var(--text);font-size:10px;font-weight:500}.route-error{max-width:150px;margin:4px 0 0;overflow:hidden;color:var(--red);font-size:8px;text-overflow:ellipsis;white-space:nowrap}.route-link-count{min-width:29px;height:26px;display:inline-grid;place-items:center;color:var(--cyan);border:1px solid var(--line);border-radius:8px;background:var(--surface-soft);font:600 10px var(--font-mono)}.danger-action:hover{color:var(--red)!important}.route-form{display:flex;flex-direction:column;gap:20px}.toggle-field{display:flex;gap:11px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-soft);cursor:pointer}.toggle-field input{accent-color:var(--cyan)}.toggle-field strong,.toggle-field small{display:block}.toggle-field strong{color:var(--text-strong);font-size:11px}.toggle-field small{margin-top:4px;color:var(--text-muted);font-size:9px}
 @media(max-width:900px){.route-toolbar{align-items:flex-start;flex-direction:column}.route-toolbar form{width:100%;flex-wrap:wrap}.route-toolbar .search-field{min-width:200px;flex:1}}@media(max-width:650px){.route-summary{grid-template-columns:repeat(2,1fr)}.route-summary>div:nth-child(2){border-right:0}.route-summary>div:nth-child(-n+2){border-bottom:1px solid var(--line)}.route-toolbar form>select,.route-toolbar .search-field{width:100%;min-width:100%}}
-</style>
 
+.mini-spinner.is-dark { border-color: rgba(var(--cyan-rgb),.22); border-top-color: var(--text-on-accent); }
+.route-toolbar > div > span,
+.route-identity > span,
+.route-target strong { color: var(--violet-text); }
+</style>

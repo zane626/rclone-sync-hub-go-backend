@@ -15,6 +15,7 @@ import (
 	"rclone-sync-hub/internal/logger"
 	"rclone-sync-hub/internal/model"
 	"rclone-sync-hub/internal/observability"
+	"rclone-sync-hub/internal/pathpipeline"
 	"rclone-sync-hub/internal/security"
 
 	"go.uber.org/zap"
@@ -430,6 +431,10 @@ func (s *watchFolderScanner) scanFolder(ctx context.Context, wf *model.WatchFold
 	if !rootInfo.IsDir() {
 		return stats, fmt.Errorf("local path is not a directory: %s", root)
 	}
+	uploadPathPipeline, err := pathpipeline.Compile(wf.PathPipeline)
+	if err != nil {
+		return stats, fmt.Errorf("compile upload path pipeline: %w", err)
+	}
 
 	records, err := s.fileRepo.ListForWatchFolder(ctx, wf.ID, root)
 	if err != nil {
@@ -521,7 +526,20 @@ func (s *watchFolderScanner) scanFolder(ctx context.Context, wf *model.WatchFold
 		localPath = filepath.Clean(localPath)
 		seenPaths[localPath] = struct{}{}
 		fingerprint := metadataFingerprint(info.Size(), info.ModTime())
-		remotePath := joinRemotePath(remotePrefix, relativeSlash)
+		remoteRelativePath := relativeSlash
+		pipelineDirectory, pipelineMatched, pipelineErr := uploadPathPipeline.Resolve(entry.Name())
+		if pipelineErr != nil {
+			recordProblem(fmt.Errorf("resolve upload path for %s: %w", localPath, pipelineErr))
+			return nil
+		}
+		if pipelineMatched {
+			remoteRelativePath = joinRemotePath(pipelineDirectory, relativeSlash)
+		}
+		remotePath := joinRemotePath(remotePrefix, remoteRelativePath)
+		if len(remotePath) > 768 {
+			recordProblem(fmt.Errorf("remote path for %s exceeds 768 bytes", localPath))
+			return nil
+		}
 		now := time.Now()
 		fr, exists := recordByPath[localPath]
 		previousFingerprint := ""

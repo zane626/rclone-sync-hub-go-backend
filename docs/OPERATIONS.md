@@ -41,11 +41,21 @@ Suggested objectives:
 
 1. Back up the database and retain the previous immutable image tag.
 2. Run CI and build the candidate image. Deploy it to staging using a copy of production configuration and representative files.
-3. Verify migrations, authentication, scan history, task claiming, retry/cancel, and one real rclone transfer.
+3. Verify clean-database table creation, schema compatibility, authentication, scan history, task claiming, retry/cancel, and one real rclone transfer.
 4. Roll out one application instance first. Check readiness, error logs, queue age, scan failures, worker failures, and database connection pressure before completing rollout.
-5. Roll back the application image if needed. Database migrations are append-only and are not automatically reversed; destructive schema changes require an explicit expand/migrate/contract release plan.
+5. Roll back the application image if needed. The application does not upgrade existing tables; releases with schema changes require a new empty database or operator-managed DDL before deployment.
 
-Before this production release, verify that no two existing watch folders are parent/child paths. Startup intentionally fails with both folder IDs if legacy data violates this invariant, so an operator can resolve the ambiguous ownership instead of silently uploading a file to two destinations. Migration 3 automatically cancels unfinished work whose watch folder was already deleted and makes its file snapshots reclaimable.
+Before this production release, verify that no two existing watch folders are parent/child paths. Startup intentionally fails with both folder IDs if existing data violates this invariant, so an operator can resolve the ambiguous ownership instead of silently uploading a file to two destinations. Legacy rows are not rewritten automatically.
+
+## Remote mutation compatibility
+
+Folder creation, folder rename, and file moves require write support from the configured rclone backend. The application verifies each mutation after rclone exits and treats a missing destination as a failure, even if rclone returned exit code 0.
+
+Batch file moves run as background operations. `POST /api/remote-routes/:id/files/move` returns HTTP 202 with an operation ID; poll `GET /api/remote-routes/:id/files/move/:operation_id` for the current phase, processed/total counts, current path, and per-file results. The browser may close the file panel without canceling the operation. Do not restart the application container during an active move because operation state is held by the running application process. Only one batch move may run for a route at a time.
+
+Remote browsing excludes rows carrying `missing_at`. After a complete successful route scan, the scanner physically deletes every index row not observed in that scan, including legacy missing rows. An interrupted or failed listing never runs this cleanup, so an incomplete remote response cannot erase the prior index.
+
+OpenList 115 users must run OpenList v4.2.3 or newer. OpenList v4.2.2 and earlier contain a 115 driver bug that can reject `MKCOL` with HTTP 405 while rclone v1.75 treats that response as if the directory already existed. Upgrade OpenList before enabling remote mutations, then verify folder creation and a canary move on a disposable path.
 
 ## Monitoring and alerting
 

@@ -219,4 +219,44 @@ onBeforeUnmount(()=>{ eventAbortController.abort(); window.clearInterval(refresh
 @media(max-width:1300px){.ops-ribbon{grid-template-columns:minmax(250px,1.4fr) repeat(3,1fr)}.ops-ribbon>div:nth-child(5){display:none}.ops-topology{grid-template-columns:1fr}.event-panel{min-height:310px}.ops-lower{grid-template-columns:1fr}.remote-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:860px){.ops-ribbon{grid-template-columns:1.4fr 1fr 1fr}.ops-ribbon>div:nth-child(4){display:none}.probe-grid{grid-template-columns:1fr}.scan-panel__header{flex-direction:column}.scan-summary{width:100%;overflow:auto}.scan-summary>span:first-child{padding-left:0;border-left:0}.scan-toolbar{align-items:flex-start;flex-direction:column}.folder-selector{width:100%}.remote-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.audit-row{grid-template-columns:50px minmax(0,1fr) 38px}.audit-row time{display:none}}
 @media(max-width:560px){.stream-pill{display:none}.ops-ribbon{grid-template-columns:1fr 1fr}.ops-ribbon>div:nth-child(3){display:none}.ops-ribbon__primary strong{font-size:12px}.core-orb{width:38px;height:38px}.remote-grid{grid-template-columns:1fr}.scan-summary>span{min-width:90px;padding:0 12px}.health-footer{align-items:flex-start;flex-direction:column}.event-item{grid-template-columns:20px 6px 1fr}.event-item time{display:none}}
+
+/* Theme-aware contrast normalization. */
+.stream-pill { color: var(--green); }
+.stream-pill.is-reconnecting { color: var(--amber); }
+.mini-spinner.is-dark { border-color: rgba(var(--cyan-rgb),.22); border-top-color: var(--text-on-accent); }
+.ops-ribbon { background: var(--success-summary-background); box-shadow: var(--shadow-card); }
+.ops-ribbon.is-degraded { background: var(--danger-summary-background); }
+.ops-ribbon.is-checking { background: var(--warning-summary-background); }
+.ops-ribbon__primary strong { color: var(--text-strong); }
+.ops-ribbon__primary small { color: var(--green); }
+.ops-ribbon > div > strong small,
+.ops-ribbon__stamp,
+.probe-card small,
+.health-footer,
+.event-index,
+.event-item p,
+.event-item time,
+.event-footer,
+.scan-toolbar > span,
+.folder-selector > .ui-icon,
+.scan-identity small,
+.date-cell small,
+.remote-card__number,
+.remote-card small,
+.audit-row p,
+.audit-row time,
+.access-panel > span,
+.access-panel small { color: var(--text-muted); }
+.probe-card,
+.remote-card { background: var(--surface-soft); }
+.probe-card.is-violet .probe-card__icon,
+.event-item.is-violet,
+.remote-card__icon { color: var(--violet-text); }
+.event-item strong,
+.date-cell strong,
+.audit-row strong { color: var(--text); }
+.scan-toolbar { background: var(--surface-inset); }
+.muted-check { color: var(--green); }
+.audit-row { border-bottom-color: var(--row-line); }
+.access-panel > span { background: var(--surface-soft); }
 </style>

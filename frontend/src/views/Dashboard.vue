@@ -305,4 +305,31 @@ onBeforeUnmount(() => window.clearInterval(refreshTimer));
 @media (max-width: 1320px) { .metric-grid { grid-template-columns: repeat(3,1fr); }.dashboard-primary { grid-template-columns: 1fr; }.status-panel { display: grid; grid-template-columns: 1fr 220px 1.2fr; min-height: auto; }.status-panel .panel-header { grid-row: 1; grid-column: 1/-1; }.activity-grid { grid-template-columns: 1fr; } }
 @media (max-width: 850px) { .signal-ribbon { grid-template-columns: 1fr auto; }.signal-ribbon__item { display: none; }.metric-grid { grid-template-columns: repeat(2,1fr); }.status-panel { display: block; }.trend-summary { margin: 0 12px 14px; }.activity-item { grid-template-columns: 34px minmax(0,1fr) auto; }.activity-item time { display: none; } }
 @media (max-width: 560px) { .metric-grid { grid-template-columns: 1fr; }.metric-card { min-height: 145px; }.signal-ribbon__scan { display: none; }.trend-chart { padding-left: 38px; padding-right: 10px; }.trend-y-labels { left: 10px; }.trend-summary { grid-template-columns: 1fr; }.trend-summary div { border-right: 0; border-bottom: 1px solid var(--line); }.activity-item { grid-template-columns: 32px minmax(0,1fr); }.activity-item .status-badge { display: none; } }
+
+/* Theme-aware contrast normalization. */
+.signal-ribbon { background: var(--success-summary-background); box-shadow: var(--shadow-card); }
+.signal-ribbon__title strong { color: var(--text-strong); }
+.signal-ribbon__title small { color: var(--green); font-weight: 600; }
+.signal-ribbon.is-degraded { background: var(--danger-summary-background); }
+.signal-ribbon.is-checking { background: var(--warning-summary-background); }
+.signal-ribbon.is-degraded .signal-ribbon__title strong { color: var(--text-strong); }
+.signal-ribbon.is-degraded .signal-ribbon__title small { color: var(--red); }
+.metric-card { background: var(--summary-background); box-shadow: var(--shadow-card); }
+.metric-card__code { color: var(--text-subtle); }
+.metric-card__bottom span { color: var(--text); }
+.metric-card__bottom small { color: var(--text-muted); }
+.metric-card.is-violet .metric-card__icon { color: var(--violet-text); }
+.point-group.is-success circle,
+.point-group.is-failed circle { fill: var(--surface-solid); }
+.trend-y-labels,
+.trend-dates { color: var(--text-muted); }
+.trend-summary { background: var(--surface-inset); }
+.completion-ring::after { background: var(--surface-solid); }
+.folder-identity small,
+.activity-item time,
+.failure-item time { color: var(--text-muted); }
+.failure-item strong { color: var(--text); }
+.failure-item p { color: var(--red); }
+.all-clear strong { color: var(--text); }
+.all-clear p { color: var(--text-muted); }
 </style>

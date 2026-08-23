@@ -1,4 +1,4 @@
-// Package database 封装数据库连接与迁移，仅在此处依赖具体 driver；main 通过依赖注入获得 *gorm.DB。
+// Package database 封装数据库连接与首次建表，仅在此处依赖具体 driver；main 通过依赖注入获得 *gorm.DB。
 // 支持后期通过 config.Driver 切换数据库（如 mysql / postgres）。
 package database
 

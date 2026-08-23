@@ -50,7 +50,7 @@
                 </div>
               </td>
               <td><span class="path-cell mono" :title="row.localPath">{{ row.localPath }}</span></td>
-              <td><div class="remote-cell"><span>{{ remoteRouteLabel(row) }}</span><small class="mono" :title="`${row.remoteName}:${row.remotePath}`">{{ row.remoteName }}:{{ row.remotePath }}</small></div></td>
+              <td><div class="remote-cell"><span>{{ remoteRouteLabel(row) }}</span><small class="mono" :title="`${row.remoteName}:${row.remotePath}`">{{ row.remoteName }}:{{ row.remotePath }}</small><small v-if="row.pathPipeline.length" class="pipeline-indicator">PIPELINE · {{ row.pathPipeline.length }} STEP</small></div></td>
               <td><StatusBadge :status="row.status" /><p v-if="row.lastError" class="row-error" :title="row.lastError">{{ row.lastError }}</p></td>
               <td><div class="cycle-cell"><strong class="mono">{{ formatDuration(row.scanIntervalSeconds) }}</strong><small>DEPTH {{ row.maxDepth || '∞' }}</small></div></td>
               <td><div class="date-cell"><strong>{{ formatDateTime(row.lastScanAt) }}</strong><small v-if="row.lastScanDurationMs">耗时 {{ formatMilliseconds(row.lastScanDurationMs) }}</small></div></td>
@@ -102,7 +102,29 @@
             </section>
 
             <section class="form-section">
-              <div class="form-section__heading"><span>03</span><div><strong>扫描策略</strong><small>SCAN POLICY</small></div></div>
+              <div class="form-section__heading"><span>03</span><div><strong>上传路径管道</strong><small>UPLOAD PATH PIPELINE</small></div></div>
+              <label class="pipeline-toggle">
+                <input v-model="form.path_pipeline_enabled" type="checkbox" @change="ensurePipelineStep" />
+                <span><strong>按文件名解析远端子目录</strong><small>管道以文件名为输入；当前步骤支持正则捕获组提取。</small></span>
+              </label>
+              <template v-if="form.path_pipeline_enabled">
+                <div v-for="(step, index) in form.path_pipeline" :key="index" class="pipeline-step">
+                  <div class="pipeline-step__header"><span>STEP {{ String(index + 1).padStart(2, '0') }}</span><strong>正则提取</strong><button v-if="form.path_pipeline.length > 1" class="icon-button" type="button" title="删除步骤" @click="removePipelineStep(index)"><UiIcon name="trash" :size="14" /></button></div>
+                  <div class="field"><label :for="`pipeline-pattern-${index}`">正则表达式 *</label><input :id="`pipeline-pattern-${index}`" v-model="step.pattern" class="ui-control mono" placeholder="\[(\d{4}-\d{2})-\d{2}_" /><p class="field-help">从当前输入查找匹配；使用 Go RE2 正则语法。</p></div>
+                  <div class="field"><label :for="`pipeline-group-${index}`">捕获组</label><input :id="`pipeline-group-${index}`" v-model.number="step.group" class="ui-control mono" type="number" min="1" /><p class="field-help">捕获结果将作为下一步输入，最后一步结果作为远端子目录。</p></div>
+                </div>
+                <button class="ui-button is-small pipeline-add" type="button" @click="addPipelineStep"><UiIcon name="plus" :size="14" /> 添加正则步骤</button>
+                <div class="field pipeline-test-field"><label for="pipeline-test-name">测试文件名</label><input id="pipeline-test-name" v-model="form.path_pipeline_test_name" class="ui-control mono" /></div>
+                <div class="pipeline-preview" :class="`is-${pipelinePreview.state}`">
+                  <div><span>{{ pipelinePreview.label }}</span><small>{{ pipelinePreview.detail }}</small></div>
+                  <code>{{ pipelinePreview.path }}</code>
+                </div>
+                <p class="field-help pipeline-fallback-help">正则未匹配时不会阻止上传，文件将保持原相对路径。</p>
+              </template>
+            </section>
+
+            <section class="form-section">
+              <div class="form-section__heading"><span>04</span><div><strong>扫描策略</strong><small>SCAN POLICY</small></div></div>
               <div class="form-grid">
                 <div class="field"><label for="max-depth">最大扫描深度</label><input id="max-depth" v-model.number="form.max_depth" class="ui-control mono" type="number" min="0" /><p class="field-help">0 表示不限制</p></div>
                 <div class="field"><label for="scan-interval">扫描周期（秒）</label><input id="scan-interval" v-model.number="form.scan_interval_seconds" class="ui-control mono" type="number" min="60" /><p class="field-help">最短 60 秒</p></div>
@@ -188,12 +210,20 @@ const watchingCount = computed(() => tableData.value.filter((row) => row.status 
 const detectingCount = computed(() => tableData.value.filter((row) => row.status === 'detecting').length);
 const errorCount = computed(() => tableData.value.filter((row) => row.status === 'error').length);
 const selectedFormRoute = computed(() => remoteOptions.value.find((route) => route.id === Number(form.remote_route_id)) || null);
+const pipelinePreview = computed(() => buildPipelinePreview());
 
 function defaultForm() {
-  return { name: '', local_path: '', remote_route_id: '', max_depth: 5, filter_keywords: '', scan_interval_seconds: 300, sync_type: 'local_to_remote' };
+  return {
+    name: '', local_path: '', remote_route_id: '', max_depth: 5, filter_keywords: '', scan_interval_seconds: 300, sync_type: 'local_to_remote',
+    path_pipeline_enabled: false,
+    path_pipeline: [defaultPipelineStep()],
+    path_pipeline_test_name: '[Zz1tai]-直播回放-[2025-11-19_21_01_27].mp4'
+  };
 }
+function defaultPipelineStep() { return { type: 'regex_extract', pattern: '\\[(\\d{4}-\\d{2})-\\d{2}_', group: 1 }; }
 function pick(item, ...keys) { for (const key of keys) if (item?.[key] !== undefined && item?.[key] !== null) return item[key]; return undefined; }
 function normalizeRow(item) {
+  const pathPipeline = pick(item, 'path_pipeline', 'PathPipeline');
   return {
     ...item,
     id: pick(item, 'ID', 'id'), name: pick(item, 'Name', 'name') || '未命名目录',
@@ -202,7 +232,8 @@ function normalizeRow(item) {
     status: pick(item, 'Status', 'status') || 'stopped', maxDepth: Number(pick(item, 'MaxDepth', 'max_depth') || 0), filterKeywords: pick(item, 'FilterKeywords', 'filter_keywords') || '',
     scanIntervalSeconds: Number(pick(item, 'ScanIntervalSeconds', 'scan_interval_seconds') || 300), syncType: pick(item, 'SyncType', 'sync_type') || 'local_to_remote',
     lastScanAt: pick(item, 'LastScanFinishedAt', 'last_scan_finished_at', 'LastScanAt', 'last_scan_at'), lastScanDurationMs: Number(pick(item, 'LastScanDurationMs', 'last_scan_duration_ms') || 0),
-    totalFileCount: Number(pick(item, 'TotalFileCount', 'total_file_count') || 0), totalFileSize: Number(pick(item, 'TotalFileSize', 'total_file_size') || 0), lastError: pick(item, 'LastError', 'last_error') || ''
+    totalFileCount: Number(pick(item, 'TotalFileCount', 'total_file_count') || 0), totalFileSize: Number(pick(item, 'TotalFileSize', 'total_file_size') || 0), lastError: pick(item, 'LastError', 'last_error') || '',
+    pathPipeline: Array.isArray(pathPipeline) ? pathPipeline : []
   };
 }
 function number(value) { return new Intl.NumberFormat('zh-CN').format(Number(value || 0)); }
@@ -246,13 +277,50 @@ async function handleDelete(row) {
   catch (error) { toast(errorText(error, '删除失败'), 'error'); }
 }
 function openCreate() { drawerMode.value = 'create'; editingId.value = null; Object.assign(form, defaultForm()); drawerVisible.value = true; }
-function openEdit(row) { drawerMode.value = 'edit'; editingId.value = row.id; Object.assign(form, { name: row.name, local_path: row.localPath, remote_route_id: row.remoteRouteId || '', max_depth: row.maxDepth, filter_keywords: row.filterKeywords, scan_interval_seconds: row.scanIntervalSeconds, sync_type: row.syncType }); drawerVisible.value = true; }
+function openEdit(row) {
+  drawerMode.value = 'edit';
+  editingId.value = row.id;
+  const pathPipeline = row.pathPipeline.length ? row.pathPipeline.map((step) => ({ type: step.type || 'regex_extract', pattern: step.pattern || '', group: Number(step.group) || 1 })) : [defaultPipelineStep()];
+  Object.assign(form, {
+    name: row.name, local_path: row.localPath, remote_route_id: row.remoteRouteId || '', max_depth: row.maxDepth, filter_keywords: row.filterKeywords,
+    scan_interval_seconds: row.scanIntervalSeconds, sync_type: row.syncType, path_pipeline_enabled: row.pathPipeline.length > 0,
+    path_pipeline: pathPipeline, path_pipeline_test_name: defaultForm().path_pipeline_test_name
+  });
+  drawerVisible.value = true;
+}
 function closeDrawer() { if (!saving.value) drawerVisible.value = false; }
 function normalizeKeywords(value) { return String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join('\n'); }
+function ensurePipelineStep() { if (form.path_pipeline_enabled && !form.path_pipeline.length) form.path_pipeline.push(defaultPipelineStep()); }
+function addPipelineStep() { form.path_pipeline.push(defaultPipelineStep()); }
+function removePipelineStep(index) { form.path_pipeline.splice(index, 1); ensurePipelineStep(); }
+function joinRemotePreview(...parts) { return parts.map((part) => String(part || '').replace(/^\/+|\/+$/g, '')).filter(Boolean).join('/'); }
+function buildPipelinePreview() {
+  const route = selectedFormRoute.value;
+  const fileName = String(form.path_pipeline_test_name || '').trim() || '<文件名>';
+  const base = joinRemotePreview(route?.remotePath);
+  const prefix = route ? `${route.remoteName}:` : '';
+  if (!form.path_pipeline_enabled) return { state: 'idle', label: '管道未启用', detail: '文件保持原相对路径', path: `${prefix}${joinRemotePreview(base, fileName)}` };
+  let value = fileName;
+  try {
+    for (const step of form.path_pipeline) {
+      const match = new RegExp(String(step.pattern || '')).exec(value);
+      const group = Number(step.group);
+      if (!match || match[group] === undefined) return { state: 'fallback', label: '测试文件名未匹配', detail: '将回退到原相对路径', path: `${prefix}${joinRemotePreview(base, fileName)}` };
+      value = match[group];
+    }
+  } catch (error) {
+    return { state: 'error', label: '正则预览失败', detail: error?.message || '表达式无效', path: `${prefix}${joinRemotePreview(base, fileName)}` };
+  }
+  const directory = String(value || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!directory || directory.split('/').some((part) => part === '..')) return { state: 'error', label: '提取目录无效', detail: '结果不能为空或包含 ..', path: `${prefix}${joinRemotePreview(base, fileName)}` };
+  return { state: 'matched', label: `已提取子目录 ${directory}`, detail: '最终上传路径预览', path: `${prefix}${joinRemotePreview(base, directory, fileName)}` };
+}
 async function handleSubmit() {
   if (!form.name.trim() || !form.local_path.trim() || !Number(form.remote_route_id)) { toast('请填写名称、本地路径并选择远端路由', 'warning'); return; }
   if (Number(form.scan_interval_seconds) < 60) { toast('扫描周期不能小于 60 秒', 'warning'); return; }
-  const payload = { name: form.name.trim(), local_path: form.local_path.trim(), remote_route_id: Number(form.remote_route_id), max_depth: Number(form.max_depth) || 0, filter_keywords: normalizeKeywords(form.filter_keywords), scan_interval_seconds: Number(form.scan_interval_seconds) || 300, sync_type: form.sync_type };
+  const pathPipeline = form.path_pipeline_enabled ? form.path_pipeline.map((step) => ({ type: 'regex_extract', pattern: String(step.pattern || '').trim(), group: Number(step.group) })) : [];
+  if (pathPipeline.some((step) => !step.pattern || !Number.isInteger(step.group) || step.group < 1)) { toast('请填写有效的正则表达式和捕获组', 'warning'); return; }
+  const payload = { name: form.name.trim(), local_path: form.local_path.trim(), remote_route_id: Number(form.remote_route_id), max_depth: Number(form.max_depth) || 0, filter_keywords: normalizeKeywords(form.filter_keywords), scan_interval_seconds: Number(form.scan_interval_seconds) || 300, sync_type: form.sync_type, path_pipeline: pathPipeline };
   saving.value = true;
   try { if (drawerMode.value === 'create') await createWatchFolder(payload); else await updateWatchFolder(editingId.value, payload); toast('监控目录已保存', 'success'); drawerVisible.value = false; await loadData(); }
   catch (error) { toast(errorText(error, '保存失败'), 'error'); }
@@ -290,7 +358,38 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
 .folders-table th:last-child,.folders-table td:last-child{position:sticky;right:0;z-index:2;background:#0e1520;box-shadow:-12px 0 24px rgba(4,7,12,.72)}.folders-table th:last-child{z-index:3;background:#0b111a}.folders-table tr:hover td:last-child{background:#111b27}
 .folder-form { display: flex; flex-direction: column; gap: 20px; }.form-section { padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.018); }.form-section__heading { display: flex; align-items: center; gap: 10px; margin-bottom: 19px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }.form-section__heading > span { width: 30px; height: 30px; display: grid; place-items: center; color: var(--cyan); border: 1px solid rgba(88,224,255,.17); border-radius: 9px; background: rgba(88,224,255,.06); font: 600 9px var(--font-mono); }.form-section__heading strong,.form-section__heading small { display: block; }.form-section__heading strong { color: var(--text-strong); font-size: 12px; }.form-section__heading small { margin-top: 3px; color: #4c586a; font: 500 8px var(--font-mono); letter-spacing: .08em; }.form-section .field + .field { margin-top: 16px; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }.form-grid + .field { margin-top: 16px; }
 .selected-route { display:flex;align-items:center;gap:10px;margin:16px 0 0;padding:12px;color:var(--violet);border:1px solid rgba(140,118,255,.18);border-radius:11px;background:rgba(140,118,255,.06) }.selected-route strong,.selected-route small{display:block}.selected-route strong{color:var(--text-strong);font-size:11px}.selected-route small{margin-top:3px;color:var(--text-muted);font-size:9px}.route-help{margin-top:14px}
+.pipeline-indicator { color: var(--cyan)!important; letter-spacing: .06em; }
+.pipeline-toggle { display:flex;align-items:flex-start;gap:12px;padding:14px;color:inherit;border:1px solid rgba(88,224,255,.13);border-radius:12px;background:rgba(88,224,255,.035);cursor:pointer }.pipeline-toggle input{margin-top:2px;accent-color:var(--cyan)}.pipeline-toggle strong,.pipeline-toggle small{display:block}.pipeline-toggle strong{color:var(--text-strong);font-size:11px}.pipeline-toggle small{margin-top:4px;color:var(--text-muted);font-size:9px;line-height:1.5}
+.pipeline-step{margin-top:14px;padding:15px;border:1px solid var(--line);border-radius:12px;background:rgba(4,8,14,.35)}.pipeline-step__header{display:flex;align-items:center;gap:9px;margin-bottom:14px}.pipeline-step__header>span{color:var(--cyan);font:600 8px var(--font-mono);letter-spacing:.08em}.pipeline-step__header>strong{color:var(--text-strong);font-size:10px}.pipeline-step__header>.icon-button{width:28px;height:28px;margin-left:auto}.pipeline-add{margin-top:12px}.pipeline-test-field{margin-top:16px!important}.pipeline-preview{margin-top:12px;padding:13px;border:1px solid var(--line);border-radius:11px;background:rgba(4,8,14,.48)}.pipeline-preview>div{display:flex;align-items:center;justify-content:space-between;gap:10px}.pipeline-preview span{color:var(--text-strong);font-size:10px}.pipeline-preview small{color:var(--text-muted);font-size:8px}.pipeline-preview code{display:block;margin-top:9px;overflow-wrap:anywhere;color:#8f9eb2;font:500 9px/1.55 var(--font-mono)}.pipeline-preview.is-matched{border-color:rgba(61,225,162,.2);background:rgba(61,225,162,.04)}.pipeline-preview.is-matched span,.pipeline-preview.is-matched code{color:var(--green)}.pipeline-preview.is-error{border-color:rgba(255,98,125,.22);background:rgba(255,98,125,.04)}.pipeline-preview.is-error span{color:var(--red)}.pipeline-preview.is-fallback{border-color:rgba(255,180,74,.2);background:rgba(255,180,74,.04)}.pipeline-preview.is-fallback span{color:var(--amber)}.pipeline-fallback-help{margin-top:9px}
 .path-modal-layer { position: fixed; inset: 0; z-index: 220; display: grid; place-items: center; padding: 20px; background: rgba(1,4,8,.78); backdrop-filter: blur(8px); }.path-modal { width: min(760px,100%); max-height: min(760px,90vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 19px; background: #0e1520; box-shadow: 0 35px 100px rgba(0,0,0,.58); }.path-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 21px 23px; border-bottom: 1px solid var(--line); }.path-modal h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 18px; }.path-modal__current { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: rgba(4,8,14,.4); }.path-modal__current .icon-button { color: var(--cyan); }.path-modal__current .ui-control { height: 37px; }.path-browser { min-height: 310px; flex: 1; overflow: auto; padding: 10px; }.path-entry { width: 100%; display: grid; grid-template-columns: 38px minmax(0,1fr) 34px auto; align-items: center; gap: 10px; padding: 10px; color: inherit; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; }.path-entry:hover { border-color: var(--line); background: rgba(88,224,255,.035); }.path-entry > span { width: 36px; height: 36px; display: grid; place-items: center; color: var(--cyan); border-radius: 10px; background: rgba(88,224,255,.06); }.path-entry strong,.path-entry small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.path-entry strong { color: var(--text); font-size: 11px; }.path-entry small { margin-top: 3px; color: #536075; font-size: 8px; }.path-modal > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 20px; border-top: 1px solid var(--line); }.path-modal > footer > span { max-width: 45%; overflow: hidden; color: #657287; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.path-modal > footer > div { display: flex; gap: 8px; }
 @media (max-width: 1120px) { .folder-summary { grid-template-columns: repeat(4,1fr); }.summary-sequence { display: none; }.folder-toolbar { align-items: flex-start; flex-direction: column; }.folder-filters { width: 100%; }.folder-filters .search-field { flex: 1; } }
 @media (max-width: 700px) { .folder-summary { grid-template-columns: repeat(2,1fr); }.folder-summary > div:nth-child(2) { border-right: 0; }.folder-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.folder-filters { align-items: stretch; flex-wrap: wrap; }.folder-filters .compact-select,.folder-filters .search-field { width: 100%; min-width: 100%; }.form-grid { grid-template-columns: 1fr; }.path-entry { grid-template-columns: 36px minmax(0,1fr) auto; }.path-entry > .icon-button { display: none; }.path-modal > footer { align-items: stretch; flex-direction: column; }.path-modal > footer > span { max-width: 100%; }.path-modal > footer > div { justify-content: flex-end; } }
+
+/* Theme-aware contrast normalization. */
+.mini-spinner.is-dark { border-color: rgba(var(--cyan-rgb),.22); border-top-color: var(--text-on-accent); }
+.folder-summary { background: var(--summary-background); box-shadow: var(--shadow-card); }
+.summary-sequence,
+.folder-toolbar p,
+.folder-node small,
+.cycle-cell small,
+.date-cell small,
+.capacity-cell small,
+.form-section__heading small { color: var(--text-muted); }
+.path-cell { color: var(--text-subtle); }
+.date-cell strong { color: var(--text); }
+.row-error { color: var(--red); }
+.folders-table th:last-child { background: var(--sticky-header-background); }
+.folders-table td:last-child { background: var(--sticky-cell-background); }
+.folders-table tr:hover td:last-child { background: var(--sticky-hover-background); }
+.form-section { background: var(--surface-soft); }
+.selected-route { color: var(--violet-text); border-color: rgba(var(--violet-rgb),.24); background: rgba(var(--violet-rgb),.07); }
+.pipeline-step,
+.pipeline-preview { background: var(--surface-inset); }
+.pipeline-preview code { color: var(--text); }
+.path-modal-layer { background: var(--overlay-background); }
+.path-modal { background: var(--modal-background); box-shadow: var(--shadow-card); }
+.path-modal__current { background: var(--surface-inset); }
+.path-entry:hover { background: var(--surface-hover); }
+.path-entry small,
+.path-modal > footer > span { color: var(--text-muted); }
 </style>

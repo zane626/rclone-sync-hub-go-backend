@@ -27,10 +27,11 @@ type Config struct {
 
 // ServerConfig HTTP 服务配置。
 type ServerConfig struct {
-	Port           int      `yaml:"port"`
-	Mode           string   `yaml:"mode"` // debug / release
-	EmbedFrontend  bool     `yaml:"embed_frontend"`
-	TrustedProxies []string `yaml:"trusted_proxies"` // CIDRs explicitly trusted for forwarded client IPs
+	Port             int      `yaml:"port"`
+	Mode             string   `yaml:"mode"` // debug / release
+	EmbedFrontend    bool     `yaml:"embed_frontend"`
+	WriteTimeoutSecs int      `yaml:"write_timeout_seconds"`
+	TrustedProxies   []string `yaml:"trusted_proxies"` // CIDRs explicitly trusted for forwarded client IPs
 	// EnableSwagger 是否启用 Swagger 文档（建议仅开发环境 true，生产 false）
 	EnableSwagger bool `yaml:"enable_swagger"`
 }
@@ -223,6 +224,11 @@ func applyEnvOverrides(c *Config) {
 	}
 	if v := os.Getenv("SERVER_MODE"); v != "" {
 		c.Server.Mode = v
+	}
+	if v := os.Getenv("SERVER_WRITE_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Server.WriteTimeoutSecs = n
+		}
 	}
 	if v := os.Getenv("EMBED_FRONTEND"); v != "" {
 		c.Server.EmbedFrontend = parseBool(v)
@@ -422,6 +428,9 @@ func (c *Config) Validate() error {
 	if c.Server.Mode != "debug" && c.Server.Mode != "release" && c.Server.Mode != "test" {
 		return fmt.Errorf("server.mode must be debug, release, or test")
 	}
+	if c.Server.WriteTimeoutSecs < 1 || c.Server.WriteTimeoutSecs > 3600 {
+		return fmt.Errorf("server.write_timeout_seconds must be between 1 and 3600")
+	}
 	if strings.TrimSpace(c.Database.Host) == "" || strings.TrimSpace(c.Database.User) == "" || strings.TrimSpace(c.Database.DBName) == "" {
 		return fmt.Errorf("database host, user, and dbname are required")
 	}
@@ -432,7 +441,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("database.max_idle_conns cannot exceed max_open_conns")
 	}
 	if c.Database.MaxOpenConns < 2 {
-		return fmt.Errorf("database.max_open_conns must be at least 2 so migrations can hold a dedicated advisory-lock connection")
+		return fmt.Errorf("database.max_open_conns must be at least 2 so initial table creation can hold a dedicated advisory-lock connection")
 	}
 	if c.Database.MaxOpenConns > 500 {
 		return fmt.Errorf("database.max_open_conns cannot exceed 500")
@@ -514,7 +523,7 @@ func validateEnvironment() error {
 	}
 	integerNames := []string{
 		"DB_PORT", "DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_IDLE_TIME_MINS", "DB_CONN_MAX_LIFETIME_MINS",
-		"DB_CONNECT_TIMEOUT_SECONDS", "DB_READ_TIMEOUT_SECONDS", "DB_WRITE_TIMEOUT_SECONDS", "SERVER_PORT",
+		"DB_CONNECT_TIMEOUT_SECONDS", "DB_READ_TIMEOUT_SECONDS", "DB_WRITE_TIMEOUT_SECONDS", "SERVER_PORT", "SERVER_WRITE_TIMEOUT_SECONDS",
 		"SCAN_INTERVAL_SECONDS", "SCAN_WATCH_POLL_INTERVAL_SECONDS", "SCAN_FOLDER_TIMEOUT_SECONDS", "SCAN_FILE_STABLE_SECONDS",
 		"SCAN_MAX_CONCURRENT_FOLDERS", "SCAN_BATCH_SIZE", "SCAN_LEASE_SECONDS", "SCAN_HEARTBEAT_SECONDS",
 		"WORKER_MAX_CONCURRENT", "WORKER_MAX_RETRY", "WORKER_QUEUE_SIZE", "WORKER_POLL_INTERVAL_MILLISECONDS",
@@ -555,6 +564,9 @@ func applyDefaults(c *Config) {
 	}
 	if c.Server.Mode == "" {
 		c.Server.Mode = "release"
+	}
+	if c.Server.WriteTimeoutSecs == 0 {
+		c.Server.WriteTimeoutSecs = 900
 	}
 	// embed_frontend: 生产设为 true 可嵌入 Vue 静态资源
 	if c.Worker.MaxConcurrent <= 0 {

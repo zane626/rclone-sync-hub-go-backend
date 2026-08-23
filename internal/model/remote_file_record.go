@@ -2,8 +2,9 @@ package model
 
 import "time"
 
-// RemoteFileRecord is the persisted result of an rclone lsjson scan. Missing
-// entries are retained so the UI can explain changes between scans.
+// RemoteFileRecord is the current persisted result of an rclone lsjson scan.
+// Successful complete scans delete entries that were not seen again. MissingAt
+// is retained for schema compatibility and is always excluded from browsing.
 type RemoteFileRecord struct {
 	ID            uint64 `gorm:"primaryKey"`
 	RemoteRouteID uint   `gorm:"not null;uniqueIndex:idx_remote_route_path,priority:1;index:idx_remote_parent,priority:1"`

@@ -5,6 +5,7 @@ server:
   mode: release          # debug / release
   embed_frontend: true   # 生产环境嵌入 Vue 静态资源
   enable_swagger: false  # 仅开发环境建议 true；生产必须 false
+  write_timeout_seconds: 900 # 远端批量操作可能持续数分钟
   trusted_proxies: []    # 仅填写受信反向代理 IP/CIDR；空值忽略 X-Forwarded-For
 
 database:

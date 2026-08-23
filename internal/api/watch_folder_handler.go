@@ -23,30 +23,32 @@ func NewWatchFolderHandler(svc service.WatchFolderService) *WatchFolderHandler {
 
 // WatchFolderCreateReq 创建监听文件夹的请求体。
 type WatchFolderCreateReq struct {
-	Name               string `json:"name" binding:"required"`
-	LocalPath          string `json:"local_path" binding:"required"`
-	RemoteRouteID      uint   `json:"remote_route_id"`
-	RemoteName         string `json:"remote_name"`
-	RemotePath         string `json:"remote_path"`
-	SyncType           string `json:"sync_type"`             // 可选，默认 local_to_remote
-	MaxDepth           int    `json:"max_depth"`             // 可选，0 表示不限制
-	FilterKeywords     string `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
-	ScanIntervalSecond int    `json:"scan_interval_seconds"` // 可选，默认 300
+	Name               string                         `json:"name" binding:"required"`
+	LocalPath          string                         `json:"local_path" binding:"required"`
+	RemoteRouteID      uint                           `json:"remote_route_id"`
+	RemoteName         string                         `json:"remote_name"`
+	RemotePath         string                         `json:"remote_path"`
+	SyncType           string                         `json:"sync_type"`             // 可选，默认 local_to_remote
+	MaxDepth           int                            `json:"max_depth"`             // 可选，0 表示不限制
+	FilterKeywords     string                         `json:"filter_keywords"`       // 可选，多行关键字，换行分隔，扫描时模糊匹配排除
+	ScanIntervalSecond int                            `json:"scan_interval_seconds"` // 可选，默认 300
+	PathPipeline       []model.UploadPathPipelineStep `json:"path_pipeline"`         // 可选，以文件名为输入并生成远端子目录
 }
 
 // WatchFolderUpdateReq 更新监听文件夹的请求体（全部可选）。
 type WatchFolderUpdateReq struct {
-	Name               *string `json:"name"`
-	LocalPath          *string `json:"local_path"`
-	RemoteRouteID      *uint   `json:"remote_route_id"`
-	RemoteName         *string `json:"remote_name"`
-	RemotePath         *string `json:"remote_path"`
-	SyncType           *string `json:"sync_type"`
-	MaxDepth           *int    `json:"max_depth"`
-	FilterKeywords     *string `json:"filter_keywords"`
-	ScanIntervalSecond *int    `json:"scan_interval_seconds"`
-	Status             *string `json:"status"`
-	Enabled            *bool   `json:"enabled"`
+	Name               *string                         `json:"name"`
+	LocalPath          *string                         `json:"local_path"`
+	RemoteRouteID      *uint                           `json:"remote_route_id"`
+	RemoteName         *string                         `json:"remote_name"`
+	RemotePath         *string                         `json:"remote_path"`
+	SyncType           *string                         `json:"sync_type"`
+	MaxDepth           *int                            `json:"max_depth"`
+	FilterKeywords     *string                         `json:"filter_keywords"`
+	ScanIntervalSecond *int                            `json:"scan_interval_seconds"`
+	PathPipeline       *[]model.UploadPathPipelineStep `json:"path_pipeline"`
+	Status             *string                         `json:"status"`
+	Enabled            *bool                           `json:"enabled"`
 }
 
 // nolint:deadcode,unused
@@ -82,6 +84,7 @@ func (h *WatchFolderHandler) Create(c *gin.Context) {
 		MaxDepth:           req.MaxDepth,
 		FilterKeywords:     req.FilterKeywords,
 		ScanIntervalSecond: req.ScanIntervalSecond,
+		PathPipeline:       req.PathPipeline,
 	}
 	f, err := h.svc.Create(c.Request.Context(), in)
 	if err != nil {
@@ -200,6 +203,7 @@ func (h *WatchFolderHandler) Update(c *gin.Context) {
 		MaxDepth:           req.MaxDepth,
 		FilterKeywords:     req.FilterKeywords,
 		ScanIntervalSecond: req.ScanIntervalSecond,
+		PathPipeline:       req.PathPipeline,
 		Status:             req.Status,
 		Enabled:            req.Enabled,
 	}

@@ -11,11 +11,11 @@ import (
 )
 
 type fakeRemoteRouteRepo struct {
-	route             model.RemoteRoute
-	records           map[string]model.RemoteFileRecord
-	finished          map[string]interface{}
-	markMissingCalled bool
-	markMissingBefore time.Time
+	route              model.RemoteRoute
+	records            map[string]model.RemoteFileRecord
+	finished           map[string]interface{}
+	deleteUnseenCalled bool
+	deleteUnseenBefore time.Time
 }
 
 func newFakeRemoteRouteRepo() *fakeRemoteRouteRepo {
@@ -52,10 +52,17 @@ func (r *fakeRemoteRouteRepo) UpsertFileRecords(_ context.Context, records []*mo
 	}
 	return nil
 }
-func (r *fakeRemoteRouteRepo) MarkUnseenMissing(_ context.Context, _ uint, before time.Time, _ time.Time) (int64, error) {
-	r.markMissingCalled = true
-	r.markMissingBefore = before
-	return 0, nil
+func (r *fakeRemoteRouteRepo) DeleteUnseenFileRecords(_ context.Context, _ uint, before time.Time) (int64, error) {
+	r.deleteUnseenCalled = true
+	r.deleteUnseenBefore = before
+	var deleted int64
+	for recordPath, record := range r.records {
+		if record.MissingAt != nil || record.LastSeenAt == nil || record.LastSeenAt.Before(before) {
+			delete(r.records, recordPath)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 type fakeRemoteWalker struct {
@@ -67,6 +74,13 @@ func (f *fakeRemoteWalker) Copy(context.Context, string, string, string, func(rc
 	return rclone.Result{Success: true}, nil
 }
 func (f *fakeRemoteWalker) ListRemotes(context.Context) ([]rclone.Remote, error) { return nil, nil }
+func (f *fakeRemoteWalker) StatRemote(context.Context, string, string) (rclone.RemoteObject, bool, error) {
+	return rclone.RemoteObject{}, false, nil
+}
+func (f *fakeRemoteWalker) MakeRemoteDirectory(context.Context, string, string) error { return nil }
+func (f *fakeRemoteWalker) MoveRemoteObject(context.Context, string, string, string) error {
+	return nil
+}
 func (f *fakeRemoteWalker) WalkRemote(_ context.Context, _, _ string, visit func(rclone.RemoteObject) error) error {
 	if f.err != nil {
 		return f.err
@@ -81,6 +95,11 @@ func (f *fakeRemoteWalker) WalkRemote(_ context.Context, _, _ string, visit func
 
 func TestRemoteRouteScannerPersistsFilesAndDirectoryTree(t *testing.T) {
 	repo := newFakeRemoteRouteRepo()
+	staleSeenAt := time.Now().Add(-time.Hour)
+	futureSeenAt := time.Now().Add(time.Hour)
+	missingAt := time.Now().Add(-30 * time.Minute)
+	repo.records["moved-from.txt"] = model.RemoteFileRecord{Path: "moved-from.txt", LastSeenAt: &staleSeenAt}
+	repo.records["removed-folder"] = model.RemoteFileRecord{Path: "removed-folder", IsDir: true, LastSeenAt: &futureSeenAt, MissingAt: &missingAt}
 	walker := &fakeRemoteWalker{objects: []rclone.RemoteObject{
 		{Path: "shows/episode-1.mp4", Name: "episode-1.mp4", Size: 100},
 		{Path: "shows/season-2/episode-2.mp4", Name: "episode-2.mp4", Size: 250},
@@ -101,24 +120,34 @@ func TestRemoteRouteScannerPersistsFilesAndDirectoryTree(t *testing.T) {
 	if repo.finished["status"] != model.RemoteRouteStatusReady || repo.finished["total_file_count"] != int64(2) || repo.finished["total_file_size"] != int64(350) {
 		t.Fatalf("unexpected final scan state: %+v", repo.finished)
 	}
-	if !repo.markMissingCalled {
-		t.Fatal("successful complete scan must mark unseen historical entries missing")
+	if !repo.deleteUnseenCalled {
+		t.Fatal("successful complete scan must delete unseen historical entries")
+	}
+	for _, stalePath := range []string{"moved-from.txt", "removed-folder"} {
+		if _, exists := repo.records[stalePath]; exists {
+			t.Fatalf("stale indexed path %q was not deleted", stalePath)
+		}
 	}
 	seenAt := repo.records["shows/episode-1.mp4"].LastSeenAt
-	if seenAt == nil || !seenAt.Equal(repo.markMissingBefore) || seenAt.Nanosecond()%int(time.Millisecond) != 0 {
-		t.Fatalf("scan marker must use persisted millisecond precision: seen=%v missing-before=%v", seenAt, repo.markMissingBefore)
+	if seenAt == nil || !seenAt.Equal(repo.deleteUnseenBefore) || seenAt.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Fatalf("scan marker must use persisted millisecond precision: seen=%v delete-before=%v", seenAt, repo.deleteUnseenBefore)
 	}
 }
 
-func TestRemoteRouteScannerDoesNotMarkMissingAfterPartialFailure(t *testing.T) {
+func TestRemoteRouteScannerDoesNotDeleteUnseenAfterPartialFailure(t *testing.T) {
 	repo := newFakeRemoteRouteRepo()
+	staleSeenAt := time.Now().Add(-time.Hour)
+	repo.records["existing.txt"] = model.RemoteFileRecord{Path: "existing.txt", LastSeenAt: &staleSeenAt}
 	walker := &fakeRemoteWalker{err: errors.New("remote unavailable")}
 	scanner := NewRemoteRouteScanner(repo, walker, RemoteRouteScannerConfig{RouteTimeout: time.Second, LeaseDuration: time.Minute, Heartbeat: 10 * time.Second})
 	if err := scanner.ScanOnce(context.Background()); err == nil {
 		t.Fatal("failed remote listing must be reported")
 	}
-	if repo.markMissingCalled {
-		t.Fatal("partial or failed scans must not mark prior records missing")
+	if repo.deleteUnseenCalled {
+		t.Fatal("partial or failed scans must not delete prior records")
+	}
+	if _, exists := repo.records["existing.txt"]; !exists {
+		t.Fatal("prior record was deleted after a failed scan")
 	}
 	if repo.finished["status"] != model.RemoteRouteStatusError {
 		t.Fatalf("failure status was not persisted: %+v", repo.finished)

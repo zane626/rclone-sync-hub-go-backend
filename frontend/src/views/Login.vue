@@ -212,4 +212,21 @@ async function submit() {
   .showcase-copy h1 { font-size: 34px; }.showcase-metrics { gap: 19px; }
   .access-status { top: 25px; right: 20px; }.login-card { padding: 28px 20px; }
 }
+
+/* Keep secondary copy readable in both themes; the original visual hierarchy is
+   retained through size and weight instead of low-contrast text colors. */
+.login-page { background: var(--bg-deep); }
+.showcase-copy p { color: var(--text-muted); }
+.satellite { background: var(--surface-solid); }
+.access-status { color: var(--text-muted); }
+.login-card { background: var(--panel-background); box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,.035); }
+.login-card__index,
+.login-control > .ui-icon,
+.login-control > button,
+.login-card__footer { color: var(--text-muted); }
+.login-error { color: var(--red); border-color: rgba(var(--red-rgb), .28); background: rgba(var(--red-rgb), .08); }
+.login-submit { color: var(--text-on-accent); background: var(--cyan); box-shadow: 0 10px 32px rgba(var(--cyan-rgb),.17); }
+.login-submit:hover:not(:disabled) { color: var(--text-on-accent); background: var(--cyan-hover); box-shadow: 0 14px 38px rgba(var(--cyan-rgb),.23); }
+.login-submit .spinner { border-color: rgba(var(--cyan-rgb),.2); border-top-color: var(--text-on-accent); }
+.access-footnote { color: var(--text-subtle); }
 </style>

@@ -262,4 +262,36 @@ onBeforeUnmount(()=>{eventAbortController.abort();window.clearInterval(refreshTi
 @media(max-width:1350px){.queue-toolbar{align-items:flex-start;flex-direction:column}.queue-filters,.batch-actions{width:100%}.batch-actions{justify-content:flex-end}.queue-ribbon{grid-template-columns:minmax(190px,1.2fr) repeat(4,1fr)}.queue-ribbon__selection{display:none!important}}
 @media(max-width:850px){.queue-ribbon{grid-template-columns:1fr 1fr 1fr}.queue-ribbon>div:nth-child(4),.queue-ribbon>div:nth-child(5){display:none}.queue-filters{align-items:stretch;flex-wrap:wrap}.queue-filters>select,.queue-filters .search-field{width:100%;min-width:100%}.batch-actions{justify-content:flex-start;flex-wrap:wrap}.task-table-shell{max-height:none}.log-line{grid-template-columns:32px 100px 44px minmax(0,1fr);gap:6px}.terminal-toolbar{grid-template-columns:65px 1fr auto}}
 @media(max-width:540px){.queue-ribbon{grid-template-columns:1.4fr 1fr}.queue-ribbon>div:nth-child(3){display:none}.log-line{grid-template-columns:28px 44px minmax(0,1fr)}.log-line time{display:none}.terminal-toolbar>span{display:none}.terminal-toolbar{grid-template-columns:1fr auto}}
+
+/* Theme-aware contrast normalization. */
+.live-feed { color: var(--green); }
+.live-feed.is-reconnecting { color: var(--amber); }
+.queue-ribbon { background: var(--summary-background); box-shadow: var(--shadow-card); }
+.queue-ribbon__selection { background: rgba(var(--violet-rgb),.06); }
+.queue-ribbon__selection strong { color: var(--violet-text); }
+.batch-selection { color: var(--violet-text); }
+.tasks-table tbody tr.is-selected { background: var(--surface-selected); }
+.task-identity small,
+.source-cell small,
+.route-cell small,
+.task-state > div > span:last-child,
+.date-cell small { color: var(--text-muted); }
+.source-cell strong,
+.date-cell strong { color: var(--text); }
+.route-cell span { color: var(--violet-text); }
+.task-state p { color: var(--red); }
+.speed-cell small { color: var(--green); }
+.retry-count { color: var(--text-muted); background: var(--surface-soft); }
+.tasks-table th:last-child { background: var(--sticky-header-background); }
+.tasks-table td:last-child { background: var(--sticky-cell-background); }
+.tasks-table tr:hover td:last-child,
+.tasks-table tr.is-selected td:last-child { background: var(--sticky-hover-background); }
+.terminal-toolbar,
+.terminal-status { background: var(--terminal-toolbar-background); }
+.terminal-body { background: var(--terminal-background); }
+.terminal-toolbar > span,
+.terminal-status,
+.log-index,
+.log-line time { color: var(--text-muted); }
+.log-message { color: var(--terminal-text); }
 </style>

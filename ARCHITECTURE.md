@@ -26,10 +26,11 @@ cmd/server      组装依赖、生命周期、HTTP 与优雅退出
 internal/api    HTTP 适配、鉴权、限流、审计、安全响应
 internal/service 业务用例与输入校验
 internal/scheduler 目录扫描、文件版本识别、任务生成
+internal/pathpipeline 上传路径步骤校验、编译与执行
 internal/worker MySQL 任务租约、重试、取消、rclone 编排
 internal/rclone 唯一允许启动 rclone 子进程的包
 internal/repository 数据访问与事务边界
-internal/database 连接池和版本化迁移
+internal/database 连接池和首次建表
 internal/security 凭据、令牌和资源白名单
 internal/observability 指标
 internal/events 进程内 SSE 快照分发
@@ -49,6 +50,7 @@ internal/model 持久化模型和状态常量
   → 一次性读取该目录文件快照和未完成任务
   → WalkDir 顺序遍历本地目录
   → size + mtime(ns) 生成版本指纹
+  → 以文件名执行可选上传路径管道，生成安全的远端子目录
   → 跳过仍在稳定窗口内的文件
   → 批量创建新快照、事务分批更新变化快照
   → 通过唯一 idempotency_key 批量创建任务
@@ -64,12 +66,13 @@ internal/model 持久化模型和状态常量
 - 不同目录可小规模并行，同一目录顺序遍历。批处理降低数据库往返，但不会无界增加磁盘并发。
 - 监听目录之间禁止父子路径重叠，避免同一绝对文件路径被两个目标同时认领。
 - 指纹包含目标 remote/path，因此目标变化会生成新任务。
+- 上传路径管道在每轮扫描开始时一次性编译；步骤按类型注册。当前 `regex_extract` 使用 Go RE2，匹配结果只能是远端路由下的安全相对目录；未匹配则保留原路径。
 - 文件在稳定窗口内不建单；Worker 在上传前后都检查指纹，上传过程中发生变化的版本不会被标记为成功。
 - 高频本地扫描不访问远端 API。远端发现由独立、低频的路由扫描器执行，不会重新把逐文件远端调用引入本地扫描热路径。
 
 ## 远端路由扫描流程
 
-远端目标从监控目录中抽离为可复用路由。每个监控目录保存 `remote_route_id`，同时保留派生后的 remote/path 快照，保证上传热路径无需额外联表。历史监控目录在迁移时按 remote/path 自动归并并绑定路由。
+远端目标从监控目录中抽离为可复用路由。每个监控目录保存 `remote_route_id`，同时保留派生后的 remote/path 快照，保证上传热路径无需额外联表。新建监控目录时必须选择已配置的远端路由。
 
 ```text
 轮询到期远端路由
@@ -77,7 +80,7 @@ internal/model 持久化模型和状态常量
   → rclone lsjson --recursive 流式读取对象
   → 标准化路径并补齐祖先目录节点
   → 按批 upsert 文件与目录索引
-  → 仅在完整扫描成功后标记未出现记录为 missing
+  → 仅在完整扫描成功后物理删除未出现或已标记 missing 的旧索引
   → 保存文件数、容量、耗时、错误和下一扫描时间
   → 释放租约
 ```
@@ -116,16 +119,16 @@ running ── success ───────────► success
 | 表 | 用途 |
 |---|---|
 | `watch_folders` | 目录配置、远端路由绑定、调度时间、扫描租约、最近状态和累计统计 |
+| `watch_folder_path_pipelines` | 每个监听目录的有序上传路径步骤 JSON；独立建表以兼容不修改旧表的升级策略 |
 | `file_records` | 本地路径快照、版本指纹、目标、上传时间、缺失时间 |
 | `remote_routes` | 可复用 rclone 目标、后台扫描周期、租约、状态和索引统计 |
-| `remote_file_records` | 远端文件/目录路径索引、大小、修改时间、最近发现和缺失时间 |
+| `remote_file_records` | 当前远端文件/目录路径索引、大小、修改时间、最近发现时间及兼容失效标记 |
 | `upload_tasks` | 持久化队列、幂等键、状态、租约、重试和取消信息 |
 | `upload_logs` | 节流后的上传进度和结果日志 |
 | `scan_runs` | 每轮目录扫描的耗时、文件数、跳过/缺失/错误统计 |
 | `audit_logs` | HTTP 变更操作的主体、角色、请求 ID、路径和状态码 |
-| `schema_migrations` | 迁移版本、名称、dirty 状态和应用时间 |
 
-迁移列表只能追加。应用启动时通过 MySQL advisory lock 串行执行迁移；失败版本保持 dirty，要求人工检查，防止多个实例继续在未知 schema 上运行。
+应用启动时通过 MySQL advisory lock 串行创建缺失的业务表。已存在的表不执行 `ALTER TABLE`、版本记录或历史数据回填；旧数据库必须事先具备与当前应用版本一致的表结构。
 
 维护循环按小批次清理上传日志、终态任务、扫描历史和审计日志；待处理、运行中与暂停任务不受任务保留策略影响。
 
@@ -146,7 +149,7 @@ running ── success ───────────► success
 - 共享同一个 MySQL，并且所有实例看到相同的本地目录路径和 rclone 配置。
 - 数据库连接和 MySQL 会话统一使用 UTC；所有应用主机与数据库仍必须通过 NTP 保持时钟同步，因为任务和扫描租约依赖持久化的绝对时间。
 - SSE hub 是进程内组件，不用于业务一致性。浏览器会定期重新读取数据库状态。
-- schema migration 由 advisory lock 串行化；应用发布仍应采用向后兼容的 expand/migrate/contract 流程。
+- 多实例首次建表由 advisory lock 串行化；建表器不会升级旧表，带 schema 变更的版本需使用全新数据库或由运维预先完成 DDL。
 - Compose 中的单 MySQL 适合单机部署，不等于数据库高可用。
 
 ## 故障恢复语义

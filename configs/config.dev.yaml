@@ -4,6 +4,7 @@ server:
   mode: debug
   embed_frontend: false # 本地由 Vite dev server 提供前端并代理 /api
   enable_swagger: true
+  write_timeout_seconds: 900
   trusted_proxies: []
 
 database:

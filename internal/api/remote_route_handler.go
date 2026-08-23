@@ -11,13 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type RemoteRouteHandler struct{ svc service.RemoteRouteService }
+type RemoteRouteHandler struct {
+	svc            service.RemoteRouteService
+	moveOperations *remoteMoveOperationManager
+}
 
 // Keep the model reachable for swag's type resolver.
 var _ = model.RemoteRoute{}
 
 func NewRemoteRouteHandler(svc service.RemoteRouteService) *RemoteRouteHandler {
-	return &RemoteRouteHandler{svc: svc}
+	return &RemoteRouteHandler{svc: svc, moveOperations: newRemoteMoveOperationManager(svc)}
 }
 
 type RemoteRouteCreateReq struct {
@@ -34,6 +37,21 @@ type RemoteRouteUpdateReq struct {
 	RemotePath          *string `json:"remote_path"`
 	ScanIntervalSeconds *int    `json:"scan_interval_seconds"`
 	Enabled             *bool   `json:"enabled"`
+}
+
+type RemoteFolderCreateReq struct {
+	ParentPath string `json:"parent_path"`
+	Name       string `json:"name" binding:"required"`
+}
+
+type RemoteFolderRenameReq struct {
+	Path    string `json:"path" binding:"required"`
+	NewName string `json:"new_name" binding:"required"`
+}
+
+type RemoteFilesMoveReq struct {
+	SourcePaths  []string `json:"source_paths" binding:"required,min=1,max=100,dive,required"`
+	TargetFolder string   `json:"target_folder"`
 }
 
 func remoteRouteID(c *gin.Context) (uint, bool) {
@@ -232,4 +250,126 @@ func (h *RemoteRouteHandler) BrowseFiles(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// CreateFolder creates a directory below one configured route root.
+// @Summary      创建远端文件夹
+// @Tags         remote-routes
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int                    true  "路由 ID"
+// @Param        body  body  RemoteFolderCreateReq  true  "父目录与文件夹名称"
+// @Success      201   {object} service.RemoteFolderMutationResult
+// @Failure      400   {object} map[string]string
+// @Failure      409   {object} map[string]string
+// @Security     BearerAuth
+// @Router       /api/remote-routes/{id}/folders [post]
+func (h *RemoteRouteHandler) CreateFolder(c *gin.Context) {
+	id, ok := remoteRouteID(c)
+	if !ok {
+		return
+	}
+	var req RemoteFolderCreateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
+		return
+	}
+	result, err := h.svc.CreateFolder(c.Request.Context(), id, req.ParentPath, req.Name)
+	if err != nil {
+		writeAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, result)
+}
+
+// RenameFolder renames one directory without allowing it to escape the route root.
+// @Summary      重命名远端文件夹
+// @Tags         remote-routes
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int                    true  "路由 ID"
+// @Param        body  body  RemoteFolderRenameReq  true  "目录路径与新名称"
+// @Success      200   {object} service.RemoteFolderMutationResult
+// @Failure      400   {object} map[string]string
+// @Failure      409   {object} map[string]string
+// @Security     BearerAuth
+// @Router       /api/remote-routes/{id}/folders [put]
+func (h *RemoteRouteHandler) RenameFolder(c *gin.Context) {
+	id, ok := remoteRouteID(c)
+	if !ok {
+		return
+	}
+	var req RemoteFolderRenameReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
+		return
+	}
+	result, err := h.svc.RenameFolder(c.Request.Context(), id, req.Path, req.NewName)
+	if err != nil {
+		writeAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// MoveFiles starts an asynchronous move for up to 100 indexed remote files.
+// @Summary      启动批量移动远端文件任务
+// @Tags         remote-routes
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int                 true  "路由 ID"
+// @Param        body  body  RemoteFilesMoveReq  true  "源文件路径与目标目录"
+// @Success      202   {object} RemoteMoveOperation
+// @Failure      400   {object} map[string]string
+// @Failure      409   {object} map[string]string
+// @Security     BearerAuth
+// @Router       /api/remote-routes/{id}/files/move [post]
+func (h *RemoteRouteHandler) MoveFiles(c *gin.Context) {
+	id, ok := remoteRouteID(c)
+	if !ok {
+		return
+	}
+	var req RemoteFilesMoveReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "code": "validation_error"})
+		return
+	}
+	if _, err := h.svc.Get(c.Request.Context(), id); err != nil {
+		writeAPIError(c, err)
+		return
+	}
+	operation, err := h.moveOperations.Start(id, req.SourcePaths, req.TargetFolder)
+	if err != nil {
+		writeAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, operation)
+}
+
+// GetMoveOperation returns the latest progress snapshot for one batch move.
+// @Summary      查询批量移动远端文件进度
+// @Tags         remote-routes
+// @Produce      json
+// @Param        id            path  int     true  "路由 ID"
+// @Param        operation_id  path  string  true  "移动任务 ID"
+// @Success      200  {object} RemoteMoveOperation
+// @Failure      404  {object} map[string]string
+// @Security     BearerAuth
+// @Router       /api/remote-routes/{id}/files/move/{operation_id} [get]
+func (h *RemoteRouteHandler) GetMoveOperation(c *gin.Context) {
+	id, ok := remoteRouteID(c)
+	if !ok {
+		return
+	}
+	operationID := strings.TrimSpace(c.Param("operation_id"))
+	if len(operationID) != 32 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid operation id", "code": "validation_error"})
+		return
+	}
+	operation, err := h.moveOperations.Get(id, operationID)
+	if err != nil {
+		writeAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, operation)
 }

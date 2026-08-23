@@ -26,7 +26,7 @@ type RemoteRouteRepository interface {
 	ScheduleScan(ctx context.Context, id uint) error
 	ScheduleAllScans(ctx context.Context) (int64, error)
 	UpsertFileRecords(ctx context.Context, records []*model.RemoteFileRecord, batchSize int) error
-	MarkUnseenMissing(ctx context.Context, routeID uint, scanStarted, missingAt time.Time) (int64, error)
+	DeleteUnseenFileRecords(ctx context.Context, routeID uint, scanStarted time.Time) (int64, error)
 	ListFileRecords(ctx context.Context, routeID uint, parentPath string, offset, limit int) ([]model.RemoteFileRecord, int64, error)
 }
 
@@ -328,19 +328,20 @@ func (r *remoteRouteRepository) UpsertFileRecords(ctx context.Context, records [
 	return nil
 }
 
-func (r *remoteRouteRepository) MarkUnseenMissing(ctx context.Context, routeID uint, scanStarted, missingAt time.Time) (int64, error) {
-	result := r.db.WithContext(ctx).Model(&model.RemoteFileRecord{}).
-		Where("remote_route_id = ? AND (last_seen_at IS NULL OR last_seen_at < ?) AND missing_at IS NULL", routeID, scanStarted).
-		Update("missing_at", missingAt)
+func (r *remoteRouteRepository) DeleteUnseenFileRecords(ctx context.Context, routeID uint, scanStarted time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).
+		Where("remote_route_id = ? AND (missing_at IS NOT NULL OR last_seen_at IS NULL OR last_seen_at < ?)", routeID, scanStarted).
+		Delete(&model.RemoteFileRecord{})
 	if result.Error != nil {
-		return 0, fmt.Errorf("remote file index mark missing: %w", result.Error)
+		return 0, fmt.Errorf("remote file index delete unseen: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }
 
 func (r *remoteRouteRepository) ListFileRecords(ctx context.Context, routeID uint, parentPath string, offset, limit int) ([]model.RemoteFileRecord, int64, error) {
 	parentDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(parentPath)))
-	base := r.db.WithContext(ctx).Model(&model.RemoteFileRecord{}).Where("remote_route_id = ? AND parent_hash = ? AND parent_path = ?", routeID, parentDigest, parentPath)
+	base := r.db.WithContext(ctx).Model(&model.RemoteFileRecord{}).
+		Where("remote_route_id = ? AND parent_hash = ? AND parent_path = ? AND missing_at IS NULL", routeID, parentDigest, parentPath)
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("remote file index count: %w", err)

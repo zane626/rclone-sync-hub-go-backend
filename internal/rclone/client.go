@@ -52,6 +52,11 @@ type RemoteObject struct {
 	IsDir    bool      `json:"IsDir"`
 }
 
+// ErrRemoteDirectoryNotCreated indicates that rclone reported mkdir success,
+// but the destination still did not exist as a directory. Some WebDAV
+// backends incorrectly turn an HTTP 405 response into a successful mkdir.
+var ErrRemoteDirectoryNotCreated = errors.New("remote directory was not created")
+
 // Client 封装 rclone 命令行调用。
 type Client interface {
 	// Copy 使用 copyto 将一个本地文件上传到精确的远端文件路径。
@@ -61,6 +66,14 @@ type Client interface {
 	// WalkRemote streams every file and directory below one route. Streaming
 	// avoids buffering a potentially very large remote listing in memory.
 	WalkRemote(ctx context.Context, remoteName, remotePath string, visit func(RemoteObject) error) error
+	// StatRemote returns metadata for one exact remote object. A missing object
+	// is represented by exists=false instead of an error.
+	StatRemote(ctx context.Context, remoteName, remotePath string) (object RemoteObject, exists bool, err error)
+	// MakeRemoteDirectory creates one exact remote directory.
+	MakeRemoteDirectory(ctx context.Context, remoteName, remotePath string) error
+	// MoveRemoteObject moves one exact file or directory without overwriting an
+	// existing destination.
+	MoveRemoteObject(ctx context.Context, remoteName, sourcePath, destinationPath string) error
 }
 
 type client struct {
@@ -317,6 +330,96 @@ func (c *client) WalkRemote(ctx context.Context, remoteName, remotePath string, 
 			message = waitErr.Error()
 		}
 		return fmt.Errorf("rclone lsjson: %s", message)
+	}
+	return nil
+}
+
+func remoteSpec(remoteName, remotePath string) string {
+	return fmt.Sprintf("%s:%s", remoteName, strings.TrimPrefix(remotePath, "/"))
+}
+
+func remoteCommandError(operation string, output []byte, err error) error {
+	message := strings.TrimSpace(string(output))
+	if len(message) > 4096 {
+		message = message[len(message)-4096:]
+	}
+	if message == "" {
+		message = err.Error()
+	}
+	return fmt.Errorf("rclone %s: %s", operation, message)
+}
+
+func isRemoteNotFound(err error) bool {
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		return false
+	}
+	// rclone reserves exit codes 3 and 4 for directory/file not found.
+	return exitError.ExitCode() == 3 || exitError.ExitCode() == 4
+}
+
+func (c *client) StatRemote(ctx context.Context, remoteName, remotePath string) (RemoteObject, bool, error) {
+	cmd := exec.CommandContext(ctx, c.binPath, "lsjson", remoteSpec(remoteName, remotePath), "--stat")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if isRemoteNotFound(err) {
+			return RemoteObject{}, false, nil
+		}
+		return RemoteObject{}, false, remoteCommandError("lsjson --stat", output, err)
+	}
+	var object RemoteObject
+	if err := json.Unmarshal(output, &object); err != nil {
+		return RemoteObject{}, false, fmt.Errorf("decode rclone lsjson --stat: %w", err)
+	}
+	return object, true, nil
+}
+
+func (c *client) MakeRemoteDirectory(ctx context.Context, remoteName, remotePath string) error {
+	cmd := exec.CommandContext(ctx, c.binPath, "mkdir", remoteSpec(remoteName, remotePath), "--retries=1", "--low-level-retries=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return remoteCommandError("mkdir", output, err)
+	}
+	const verificationAttempts = 3
+	for attempt := 0; attempt < verificationAttempts; attempt++ {
+		object, exists, err := c.StatRemote(ctx, remoteName, remotePath)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if object.IsDir {
+				return nil
+			}
+			return fmt.Errorf("%w: destination exists but is not a directory", ErrRemoteDirectoryNotCreated)
+		}
+		if attempt+1 < verificationAttempts {
+			timer := time.NewTimer(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return fmt.Errorf("%w: rclone mkdir returned success but the destination is missing", ErrRemoteDirectoryNotCreated)
+}
+
+func (c *client) MoveRemoteObject(ctx context.Context, remoteName, sourcePath, destinationPath string) error {
+	cmd := exec.CommandContext(ctx, c.binPath, "moveto", remoteSpec(remoteName, sourcePath), remoteSpec(remoteName, destinationPath),
+		"--ignore-existing", "--no-traverse", "--retries=1", "--low-level-retries=1", "--timeout=1h", "--contimeout=2m")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return remoteCommandError("moveto", output, err)
+	}
+	_, sourceExists, err := c.StatRemote(ctx, remoteName, sourcePath)
+	if err != nil {
+		return err
+	}
+	_, destinationExists, err := c.StatRemote(ctx, remoteName, destinationPath)
+	if err != nil {
+		return err
+	}
+	if sourceExists || !destinationExists {
+		return errors.New("rclone moveto was skipped or could not verify the destination")
 	}
 	return nil
 }

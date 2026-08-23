@@ -305,3 +305,13 @@ func (c *fakeRcloneClient) ListRemotes(context.Context) ([]rclone.Remote, error)
 func (c *fakeRcloneClient) WalkRemote(context.Context, string, string, func(rclone.RemoteObject) error) error {
 	return nil
 }
+
+func (c *fakeRcloneClient) StatRemote(context.Context, string, string) (rclone.RemoteObject, bool, error) {
+	return rclone.RemoteObject{}, false, nil
+}
+
+func (c *fakeRcloneClient) MakeRemoteDirectory(context.Context, string, string) error { return nil }
+
+func (c *fakeRcloneClient) MoveRemoteObject(context.Context, string, string, string) error {
+	return nil
+}
