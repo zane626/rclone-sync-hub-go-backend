@@ -52,6 +52,12 @@ server {
         proxy_read_timeout 1h;
     }
 
+    # Allow task deletions to finish within the frontend's 10-minute timeout.
+    location ~ ^/api/tasks/([0-9]+|batch/delete)$ {
+        proxy_pass http://rclone_sync_hub;
+        proxy_read_timeout 10m;
+    }
+
     location / {
         proxy_pass http://rclone_sync_hub;
     }

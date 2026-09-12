@@ -17,6 +17,8 @@ import (
 type TaskRepository interface {
 	GetByID(id uint) (*model.UploadTask, error)
 	Delete(ctx context.Context, id uint) error
+	// DeleteMany returns per-ID rejections only after the delete transaction commits.
+	DeleteMany(ctx context.Context, ids []uint) (map[uint]error, error)
 	// List 按状态分页列表，status 为空表示全部；keyword 非空时对 watch_folder_name/file_name/local_path/remote_name/remote_path 模糊查询。
 	List(status, keyword string, offset, limit int) ([]model.UploadTask, error)
 	// CountForList 与 List 同条件的总数，用于分页。
@@ -61,7 +63,9 @@ func (r *taskRepository) GetByID(id uint) (*model.UploadTask, error) {
 }
 
 func (r *taskRepository) Delete(ctx context.Context, id uint) error {
-	result := r.db.WithContext(ctx).Where("id = ? AND status <> ?", id, model.TaskStatusRunning).Delete(&model.UploadTask{})
+	// A single conditional DELETE is already atomic; avoid extra BEGIN/COMMIT round trips.
+	result := r.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).
+		Where("id = ? AND status <> ?", id, model.TaskStatusRunning).Delete(&model.UploadTask{})
 	if result.Error != nil {
 		return fmt.Errorf("task delete: %w", result.Error)
 	}
@@ -76,6 +80,46 @@ func (r *taskRepository) Delete(ctx context.Context, id uint) error {
 		return fmt.Errorf("running task %d cannot be deleted: %w", id, ErrConflict)
 	}
 	return nil
+}
+
+func (r *taskRepository) DeleteMany(ctx context.Context, ids []uint) (map[uint]error, error) {
+	failed := make(map[uint]error)
+	if len(ids) == 0 {
+		return failed, nil
+	}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock only the requested rows and read no file associations or large task fields.
+		// Workers cannot claim a pending task between this check and the DELETE.
+		var tasks []model.UploadTask
+		if err := tx.Select("id", "status").Where("id IN ?", ids).Order("id ASC").
+			Clauses(clause.Locking{Strength: "UPDATE"}).Find(&tasks).Error; err != nil {
+			return fmt.Errorf("task batch delete lookup: %w", err)
+		}
+		for _, id := range ids {
+			failed[id] = ErrNotFound
+		}
+		deletable := make([]uint, 0, len(tasks))
+		for _, task := range tasks {
+			if task.Status == model.TaskStatusRunning {
+				failed[task.ID] = ErrConflict
+				continue
+			}
+			delete(failed, task.ID)
+			deletable = append(deletable, task.ID)
+		}
+		if len(deletable) == 0 {
+			return nil
+		}
+		if err := tx.Where("id IN ? AND status <> ?", deletable, model.TaskStatusRunning).
+			Delete(&model.UploadTask{}).Error; err != nil {
+			return fmt.Errorf("task batch delete: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return failed, nil
 }
 
 func (r *taskRepository) applyListFilters(q *gorm.DB, status, keyword string) *gorm.DB {

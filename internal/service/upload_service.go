@@ -269,23 +269,17 @@ func (s *uploadService) CreateTask(ctx context.Context, in CreateTaskInput) (*mo
 }
 
 func (s *uploadService) DeleteTask(ctx context.Context, id uint) error {
-	task, err := s.GetTask(ctx, id)
-	if err != nil {
-		return err
+	return taskDeleteError(s.taskRepo.Delete(ctx, id))
+}
+
+func taskDeleteError(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return apperror.NotFound("task not found", err)
 	}
-	if task.Status == model.TaskStatusRunning {
-		return apperror.Conflict("running task must be canceled before deletion", nil)
+	if errors.Is(err, repository.ErrConflict) {
+		return apperror.Conflict("running task must be canceled before deletion", err)
 	}
-	if err := s.taskRepo.Delete(ctx, id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return apperror.NotFound("task not found", err)
-		}
-		if errors.Is(err, repository.ErrConflict) {
-			return apperror.Conflict("running task must be canceled before deletion", err)
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *uploadService) PauseTask(ctx context.Context, id uint) error {
@@ -341,7 +335,22 @@ func (s *uploadService) BatchPauseTasks(ctx context.Context, ids []uint) TaskBat
 }
 
 func (s *uploadService) BatchDeleteTasks(ctx context.Context, ids []uint) TaskBatchResult {
-	return runTaskBatch(ids, func(id uint) error { return s.DeleteTask(ctx, id) })
+	// Deduplicate while preserving input order in the response.
+	uniqueIDs := make([]uint, 0, len(ids))
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := seen[id]; !exists {
+			seen[id] = struct{}{}
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	failed, err := s.taskRepo.DeleteMany(ctx, uniqueIDs)
+	return runTaskBatch(uniqueIDs, func(id uint) error {
+		if err != nil {
+			return err
+		}
+		return taskDeleteError(failed[id])
+	})
 }
 
 func (s *uploadService) BatchCancelTasks(ctx context.Context, ids []uint) TaskBatchResult {

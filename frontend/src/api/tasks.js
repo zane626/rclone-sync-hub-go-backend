@@ -1,5 +1,7 @@
 import http from './http';
 
+const taskDeleteTimeout = 10 * 60 * 1000;
+
 export function fetchTasks(params) {
   return http.get('/api/tasks', {
     params
@@ -7,7 +9,7 @@ export function fetchTasks(params) {
 }
 
 export function deleteTask(id) {
-  return http.delete(`/api/tasks/${id}`).then((res) => res.data);
+  return http.delete(`/api/tasks/${id}`, { timeout: taskDeleteTimeout }).then((res) => res.data);
 }
 
 export function pauseTask(id) {
@@ -25,7 +27,7 @@ export function fetchTaskLogs(id, limit = 500) {
 }
 
 export function batchDeleteTasks(body) {
-  return http.post('/api/tasks/batch/delete', body).then((res) => res.data);
+  return http.post('/api/tasks/batch/delete', body, { timeout: taskDeleteTimeout }).then((res) => res.data);
 }
 
 export function batchPauseTasks(body) {

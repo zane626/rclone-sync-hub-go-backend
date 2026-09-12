@@ -1,5 +1,5 @@
 export async function streamTaskEvents(onEvent, signal, onConnectionChange = () => {}) {
-  const token = sessionStorage.getItem('rsh_access_token');
+  const token = localStorage.getItem('rsh_access_token');
   try {
     const response = await fetch('/api/events', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
